@@ -41,46 +41,76 @@ const AnalyticsTab = () => {
 					title='Total Users'
 					value={analyticsData.users.toLocaleString()}
 					icon={Users}
-					color='from-emerald-500 to-teal-700'
+					color='from-orange-500 to-gray-900'
 				/>
 				<AnalyticsCard
 					title='Total Products'
 					value={analyticsData.products.toLocaleString()}
 					icon={Package}
-					color='from-emerald-500 to-green-700'
+					color='from-orange-400 to-orange-100 dark:from-orange-500 dark:to-gray-800'
 				/>
 				<AnalyticsCard
 					title='Total Sales'
 					value={analyticsData.totalSales.toLocaleString()}
 					icon={ShoppingCart}
-					color='from-emerald-500 to-cyan-700'
+					color='from-orange-500 to-gray-900'
 				/>
 				<AnalyticsCard
 					title='Total Revenue'
 					value={`$${analyticsData.totalRevenue.toLocaleString()}`}
 					icon={DollarSign}
-					color='from-emerald-500 to-lime-700'
+					color='from-orange-400 to-orange-100 dark:from-orange-500 dark:to-gray-800'
 				/>
 			</div>
 			<motion.div
-				className='bg-gray-800/60 rounded-lg p-6 shadow-lg'
+				className='bg-white/60 dark:bg-gray-800/60 rounded-lg p-6 shadow-lg'
 				initial={{ opacity: 0, y: 20 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.5, delay: 0.25 }}
 			>
 				<ResponsiveContainer width='100%' height={400}>
 					<LineChart data={dailySalesData}>
-						<CartesianGrid strokeDasharray='3 3' />
-						<XAxis dataKey='name' stroke='#D1D5DB' />
-						<YAxis yAxisId='left' stroke='#D1D5DB' />
-						<YAxis yAxisId='right' orientation='right' stroke='#D1D5DB' />
-						<Tooltip />
+						<CartesianGrid stroke='#9CA3AF' strokeDasharray='3 3' />
+
+<XAxis
+	dataKey='name'
+	stroke={document.documentElement.classList.contains("dark")
+		? "#D1D5DB"
+		: "#374151"}
+/>
+
+<YAxis
+	yAxisId='left'
+	stroke={document.documentElement.classList.contains("dark")
+		? "#D1D5DB"
+		: "#374151"}
+/>
+
+<YAxis
+	yAxisId='right'
+	orientation='right'
+	stroke={document.documentElement.classList.contains("dark")
+		? "#D1D5DB"
+		: "#374151"}
+/>
+						<Tooltip
+	contentStyle={{
+		backgroundColor: document.documentElement.classList.contains("dark")
+			? "#1F2937"
+			: "#FFFFFF",
+		border: "1px solid #F97316",
+		borderRadius: "8px",
+		color: document.documentElement.classList.contains("dark")
+			? "#FFFFFF"
+			: "#111827",
+	}}
+/>
 						<Legend />
 						<Line
 							yAxisId='left'
 							type='monotone'
 							dataKey='sales'
-							stroke='#10B981'
+							stroke='#F97316'
 							activeDot={{ r: 8 }}
 							name='Sales'
 						/>
@@ -88,7 +118,7 @@ const AnalyticsTab = () => {
 							yAxisId='right'
 							type='monotone'
 							dataKey='revenue'
-							stroke='#3B82F6'
+							stroke='#EAB308'
 							activeDot={{ r: 8 }}
 							name='Revenue'
 						/>
@@ -102,19 +132,21 @@ export default AnalyticsTab;
 
 const AnalyticsCard = ({ title, value, icon: Icon, color }) => (
 	<motion.div
-		className={`bg-gray-800 rounded-lg p-6 shadow-lg overflow-hidden relative ${color}`}
+		className={`bg-white dark:bg-gray-800
+	rounded-lg p-6 shadow-lg overflow-hidden relative
+	border border-orange-300 dark:border-gray-800 ${color}`}
 		initial={{ opacity: 0, y: 20 }}
 		animate={{ opacity: 1, y: 0 }}
 		transition={{ duration: 0.5 }}
 	>
 		<div className='flex justify-between items-center'>
 			<div className='z-10'>
-				<p className='text-emerald-300 text-sm mb-1 font-semibold'>{title}</p>
-				<h3 className='text-white text-3xl font-bold'>{value}</h3>
+				<p className='text-orange-600 dark:text-yellow-400 text-sm mb-1 font-semibold'> {title}</p>
+				<h3 className='text-gray-900 dark:text-white text-3xl font-bold'> {value} </h3>
 			</div>
 		</div>
-		<div className='absolute inset-0 bg-gradient-to-br from-emerald-600 to-emerald-900 opacity-30' />
-		<div className='absolute -bottom-4 -right-4 text-emerald-800 opacity-50'>
+		<div className='absolute inset-0 bg-gradient-to-br from-orange-100 to-yellow-50 dark:from-orange-500 dark:to-gray-900 opacity-60 dark:opacity-30'/>
+		<div className='absolute -bottom-4 -right-4	text-orange-200 dark:text-orange-300 opacity-40 dark:opacity-50'>
 			<Icon className='h-32 w-32' />
 		</div>
 	</motion.div>

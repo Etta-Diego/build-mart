@@ -1,6 +1,7 @@
 import Coupon from "../models/coupon.model.js";
-import Order from "../models/order.model.js";
+import User from "../models/user.model.js";
 import { stripe } from "../lib/stripe.js";
+import { createOrder } from "./order.controller.js";
 
 export const createCheckoutSession = async (req, res) => {
 	try {
@@ -91,26 +92,17 @@ export const checkoutSuccess = async (req, res) => {
 				);
 			}
 
-			// create a new Order
-			const products = JSON.parse(session.metadata.products);
-			const newOrder = new Order({
-				user: session.metadata.userId,
-				products: products.map((product) => ({
-					product: product.id,
-					quantity: product.quantity,
-					price: product.price,
-				})),
-				totalAmount: session.amount_total / 100, // convert from cents to dollars,
-				stripeSessionId: sessionId,
-			});
+			const newOrder = await createOrder(session);
 
-			await newOrder.save();
+			await User.findByIdAndUpdate(session.metadata.userId, { cartItems: [] });
 
 			res.status(200).json({
 				success: true,
 				message: "Payment successful, order created, and coupon deactivated if used.",
 				orderId: newOrder._id,
 			});
+		} else {
+			res.status(400).json({ success: false, message: "Payment not completed." });
 		}
 	} catch (error) {
 		console.error("Error processing successful checkout:", error);

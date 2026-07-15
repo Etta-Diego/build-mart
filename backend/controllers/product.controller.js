@@ -28,9 +28,11 @@ export const getFeaturedProducts = async (req, res) => {
 			return res.status(404).json({ message: "No featured products found" });
 		}
 
-		// store in redis for future quick access
+		// store in redis for future quick access - 300s TTL bounds how stale this
+		// can get if isFeatured changes outside toggleFeaturedProduct's own cache
+		// invalidation
 
-		await redis.set("featured_products", JSON.stringify(featuredProducts));
+		await redis.set("featured_products", JSON.stringify(featuredProducts), "EX", 300);
 
 		res.json(featuredProducts);
 	} catch (error) {
@@ -148,7 +150,7 @@ async function updateFeaturedProductsCache() {
 		// The lean() method  is used to return plain JavaScript objects instead of full Mongoose documents. This can significantly improve performance
 
 		const featuredProducts = await Product.find({ isFeatured: true }).lean();
-		await redis.set("featured_products", JSON.stringify(featuredProducts));
+		await redis.set("featured_products", JSON.stringify(featuredProducts), "EX", 300);
 	} catch (error) {
 		console.log("error in update cache function");
 	}

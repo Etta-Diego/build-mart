@@ -9,7 +9,7 @@ const PurchaseCancelPage = () => {
 				initial={{ opacity: 0, y: 20 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.5 }}
-				className='max-w-md w-full bg-gray-800 rounded-lg shadow-xl overflow-hidden relative z-10'
+				className='max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden relative z-10'
 			>
 				<div className='p-6 sm:p-8'>
 					<div className='flex justify-center'>
