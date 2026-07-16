@@ -52,3 +52,49 @@ export const getUserOrders = async (req, res) => {
 		res.status(500).json({ message: "Server error", error: error.message });
 	}
 };
+
+export const getAllOrders = async (req, res) => {
+	try {
+		const orders = await Order.find({})
+			.sort({ createdAt: -1 })
+			.populate("user", "name email")
+			.populate("products.product", "name image price");
+
+		res.json(orders);
+	} catch (error) {
+		console.log("Error in getAllOrders controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
+const ORDER_STATUSES = ["pending", "processing", "shipped", "delivered", "cancelled"];
+
+export const updateOrderStatus = async (req, res) => {
+	try {
+		const { status } = req.body;
+
+		if (!ORDER_STATUSES.includes(status)) {
+			return res.status(400).json({
+				message: `Invalid status. Must be one of: ${ORDER_STATUSES.join(", ")}`,
+			});
+		}
+
+		const order = await Order.findById(req.params.id);
+
+		if (!order) {
+			return res.status(404).json({ message: "Order not found" });
+		}
+
+		order.status = status;
+		await order.save();
+
+		const updatedOrder = await Order.findById(order._id)
+			.populate("user", "name email")
+			.populate("products.product", "name image price");
+
+		res.json(updatedOrder);
+	} catch (error) {
+		console.log("Error in updateOrderStatus controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};

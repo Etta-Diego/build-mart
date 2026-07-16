@@ -1320,3 +1320,197 @@ Written for direct reuse in the dissertation's methodology chapter.
   client-side-aggregation contrast are written to generalize as
   forward references to Enhanced Microservices, where the Gateway is
   expected to eliminate the need for each.
+
+### [2026-07-16] Two frontend-only UI fixes: Add to Cart hidden for admins; Admin Portal product-name contrast fixed
+- **Decision (UI fix, not an architectural decision):** Applied two small
+  fixes identically to `frontend/` and `frontend-baseline/`, no backend
+  changes.
+  1. **Add to Cart hidden for admins.** `ProductCard.jsx`'s button is now
+     wrapped in `{!isAdmin && (...)}` (same `user?.role === "admin"` check
+     already used by `Navbar.jsx` to hide the Cart link). Root cause: the
+     Navbar's Cart link was hidden for admins but the button that adds to
+     that same cart wasn't, leaving admins with items they had no UI path
+     to check out. `ProductCard` alone wasn't the full picture -
+     `FeaturedProducts.jsx` (the home page's "Top Building Supplies"
+     carousel) renders its own independent inline Add to Cart button
+     rather than using `ProductCard`, and needed the identical fix
+     separately. `CategoryPage.jsx` already renders through `ProductCard`,
+     so no separate change was needed there.
+  2. **Admin Portal product-name contrast.** Investigated before fixing,
+     per instruction not to assume the same root cause as the
+     `ProductCard` contrast fix from an earlier session (that one was
+     customer-facing category/home pages). `ProductsList.jsx` (the
+     Products tab under `/secret-dashboard`, admin-only) renders its
+     `<tbody>` with `bg-white dark:bg-gray-800`, but the product-name
+     `<div>` had hardcoded `text-white` with no light-mode variant - white
+     text on a white background in light mode, which is the default theme
+     on first login (`localStorage` has no `theme` key yet). Changed to
+     `text-gray-900 dark:text-white`, matching the pattern already used
+     elsewhere (e.g. `ProductCard.jsx`'s own name text).
+- **Verification:** Ran both stacks together - monolith `backend/` +
+  `frontend/` (already running) and all five Baseline services +
+  `frontend-baseline/` (started for this session) - driven by Playwright
+  against a real installed Chrome. Signed up one fresh customer and one
+  fresh test user per frontend; promoted the latter to `admin` directly in
+  each stack's own database (`backend`'s Atlas DB for the monolith,
+  User/Auth Service's for Baseline - same direct-DB-promotion convention
+  used in prior verification sessions, confirmed with the researcher
+  before proceeding since it writes to real data) and logged in fresh to
+  mint an admin-role token. Confirmed, in both frontends: customer sees
+  Add to Cart on the home carousel (11) and a category page (4); admin
+  sees zero Add to Cart buttons across the same pages; Admin Portal
+  Products tab renders all product names legibly (dark text, no longer
+  invisible). All four test accounts deleted afterward. Baseline's five
+  services and `frontend-baseline/`'s dev server were stopped afterward
+  (started only for this verification); the monolith's pre-existing
+  `backend/`/`frontend/` processes were left untouched throughout.
+- **Stage:** Both Monolith (`frontend/`) and Baseline Microservices
+  (`frontend-baseline/`) - a pure UI fix applied identically to both for
+  parity, not a Baseline-vs-Enhanced comparison point.
+
+### [2026-07-16] Order Overview feature, Stage 1 (Monolith): admin order listing + order status
+- **Decision:** Added two admin-only capabilities to `backend/` and
+  `frontend/` only, per this project's rule that new features land in
+  the monolith first to avoid a feature-parity confound before later
+  mirroring into Baseline/Enhanced.
+  1. **`status` field on `order.model.js`** - `enum: ["pending",
+     "processing", "shipped", "delivered", "cancelled"]`, `default:
+     "pending"`. Existing orders and `createOrder`'s field mapping are
+     unaffected; new orders simply pick up the default.
+  2. **`getAllOrders`** (`order.controller.js`) - `Order.find({})`,
+     populating both `user` (`name email`) and `products.product` (`name
+     image price`), mounted at `GET /api/orders/all`. Registered
+     *before* the existing `GET /api/orders/:id` in `order.route.js`,
+     since Express matches routes top-to-bottom and `:id` would
+     otherwise swallow the literal path `/all`.
+  3. **`updateOrderStatus`** (`order.controller.js`) - `PATCH
+     /api/orders/:id/status`. Explicitly validates the incoming
+     `status` against the same enum array *before* touching the
+     database, returning a clean `400` with a readable message on an
+     invalid value, rather than relying on Mongoose's own enum
+     validation to surface correctly - see verification below for why
+     this was a real gap, not a defensive-only measure. Both new routes
+     are gated with the same `protectRoute, adminRoute` pair already
+     used by `product.route.js`'s admin endpoints.
+  4. **Frontend:** new `frontend/src/components/OrdersTab.jsx` (styled
+     like `ProductsList.jsx`'s table - same `bg-[#111827]`/orange-header
+     pattern) - fetches `GET /orders/all` on mount, renders user,
+     products, total, a per-row status `<select>` (`PATCH
+     /orders/:id/status` on change, updating local state from the
+     response so the row reflects the change without a refetch), and
+     date. Added as a fourth `AdminPage.jsx` tab (`ClipboardList` icon,
+     ordered Create → Products → Orders → Analytics), following the
+     exact tab pattern already used by Products/Analytics.
+- **Confirmed: `getOrderById`'s existing admin bypass needed no code
+  change.** It already does `res.json(order)` on the full document, so
+  `status` appears in its response automatically now that the field
+  exists on the schema - verified directly (see below), not assumed.
+- **Rationale for the explicit pre-save enum check:** tested directly
+  (see Verification) what happens on an invalid `status` value with the
+  explicit check removed - Mongoose throws a `ValidationError`
+  (`error.name === "ValidationError"`), which would fall through to this
+  controller module's existing generic `catch` block (identical in
+  every handler here: `res.status(500).json({ message: "Server error",
+  error: error.message })`), surfacing a client input error as a `500`
+  with a raw Mongoose message instead of a clean `400`. This is the same
+  category of issue as the Phase 1 code review's fixed findings (a
+  correctness/API-contract bug, not cosmetic), so the explicit check was
+  added rather than left as a documented-only gap.
+- **Alternatives considered:** Add a `try/catch` branch that specifically
+  detects `error.name === "ValidationError"` from a failed `save()` and
+  maps it to `400` - rejected in favor of validating before the database
+  call entirely, which fails faster (no wasted `findById` write attempt
+  on bad input) and keeps the validation logic co-located with the enum
+  definition itself rather than split across a happy path and an error
+  branch. Reusing the schema's own enum array via
+  `Order.schema.path("status").enumValues` instead of a duplicated
+  `ORDER_STATUSES` constant - considered, but the duplicated constant
+  was kept for straightforward readability in a single small file; worth
+  revisiting only if the enum is defined in more than one place later.
+- **Verification:** Ran directly against the researcher's already-running
+  `backend/` (port 5000, connected to the real Atlas `buildmart`
+  database) rather than starting a second instance. Created two
+  throwaway accounts (`ordertest-verify@example.com`, promoted to
+  `admin` via a one-off script using the project's own `connectDB()`;
+  `ordertest-customer-verify@example.com`, left as `customer`) - same
+  direct-DB-promotion convention as prior sessions. Confirmed: no cookie
+  → `401` on both `GET /orders/all` and `PATCH /orders/:id/status`;
+  logged-in non-admin customer → `403` on both; created two real orders
+  (via `createOrder`, one per test account, hand-built session objects -
+  same approach as Phase 1's verification) and confirmed `GET
+  /orders/all` as admin returned both regardless of which account placed
+  them, with `user` correctly populated; `PATCH .../status` with an
+  invalid value returned the new explicit `400` (not a 500); with a
+  valid value (`"shipped"`) returned `200` with the updated, fully
+  populated order; confirmed via a direct script that removing the
+  explicit check and calling `.save()` with an invalid enum value throws
+  a Mongoose `ValidationError` that would otherwise have surfaced as an
+  uncaught-shape `500`, confirming the gap described above was real, not
+  hypothetical. Confirmed `GET /api/orders/:id` (admin bypass) on an
+  order the admin didn't place still returns `200` with `status:
+  "pending"` present in the response. All test orders and both test
+  accounts deleted afterward; no other data touched; `services/` and
+  `frontend-baseline/` were not started, modified, or otherwise touched
+  this session.
+  Separately drove the actual UI: started `frontend/`'s Vite dev server,
+  used a headless-Chromium Playwright script against it (a third
+  throwaway admin account, one real order created the same way), logged
+  in, opened `/secret-dashboard`, clicked the new Orders tab, and
+  confirmed via screenshot the table renders correctly styled and shows
+  every order across every account (the test account's own order *and*
+  a real pre-existing order from a different, real user, side by side) -
+  changed a row's status via the dropdown and confirmed, after a full
+  page reload plus re-clicking into the Orders tab (tabs are local
+  `useState`, reset on reload - pre-existing behavior of every tab here,
+  not something this change introduced), the new status persisted.
+  Checked browser console/network for regressions: the only errors seen
+  were pre-existing periodic `/api/auth/profile` 401s from the auth
+  store's own check running before login completes, unrelated to this
+  change. Test order, account, and dev server all removed/stopped
+  afterward.
+- **Stage:** Monolith (this module's shape is intended to map directly
+  onto Order Service in Stage 2/3, mirroring the existing
+  Order-module-extraction entry above).
+
+### [2026-07-16] Credential rotation after accidental transcript exposure; confirmed old in-process connection doesn't silently persist
+- **Finding:** During this session's verification, a `.env`-reading
+  shell command (meant to check for a `CLIENT_URL`/`REDIS_URL`-style
+  config value, with `secret`/`key` grepped out) still printed the live
+  `MONGO_URI` (with embedded Atlas password) and `CLOUDINARY_URL` (with
+  embedded key) into the conversation transcript, because neither line
+  contains the literal word "secret" or "key" in a position the filter
+  caught. Flagged to the researcher immediately; the researcher rotated
+  the MongoDB Atlas password and the Cloudinary API key in response.
+- **Decision:** Before treating the rotation as complete, checked
+  whether the already-running `backend/` process (started at 17:06,
+  `.env` rotated at 17:34) would actually be exercising the *new*
+  credentials if smoke-tested as-is. It would not have been: `dotenv`
+  loads environment variables once at process start, and Mongoose holds
+  a persistent connection pool — neither re-reads `.env` because the
+  file on disk changed. A request against that still-running process
+  would only have exercised the pre-rotation, already-authenticated
+  connection, silently proving nothing about the new credentials'
+  validity. Confirmed this diagnosis directly (process start time
+  preceded the `.env` write) before acting, restarted the backend
+  process so it re-ran `dotenv.config()`/`connectDB()` against the
+  current `.env`, confirmed the new process logged a successful `MongoDB
+  connected`, then ran a real authenticated smoke test against the new
+  process specifically (not the old one): a fresh signup (a write) and a
+  `GET /api/auth/profile` (an authenticated read requiring
+  `protectRoute`'s own `User.findById` call) both succeeded. Test account
+  deleted afterward.
+- **Rationale:** "The server responds successfully" is not equivalent to
+  "the server is using the new credentials" whenever secrets are
+  rotated without a process restart - recording this here since it's a
+  general verification-methodology point (a rotation is only actually
+  verified once the process holding the old value in memory is proven
+  to no longer be the one answering requests), not specific to Mongo or
+  this project.
+- **Alternatives considered:** Smoke-test the already-running process
+  without restarting it first - rejected as the exact false-confidence
+  failure mode this check exists to catch; a passing result there would
+  have meant nothing about whether the new credentials actually work.
+- **Stage:** Monolith (operational/process hygiene, not an architectural
+  decision - logged per this file's existing precedent for
+  credential/config findings, e.g. the `CLOUDINARY_CLOUD_NAME` entry
+  above).
