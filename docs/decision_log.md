@@ -1514,3 +1514,164 @@ Written for direct reuse in the dissertation's methodology chapter.
   decision - logged per this file's existing precedent for
   credential/config findings, e.g. the `CLOUDINARY_CLOUD_NAME` entry
   above).
+
+### [2026-07-16] Order Overview feature, Stage 2 (Baseline Microservices): admin order listing + order status, mirrored from the monolith
+- **Decision:** Mirrored the monolith's already-verified Order Overview
+  feature (tagged `v1.1-monolith-baseline`) into Order Service and
+  `frontend-baseline/`. A genuine port for the pieces with no
+  cross-service dependency; new infrastructure only where the monolith's
+  single-database design had nothing to port from.
+  1. **`order.model.js`:** `status` enum field, byte-identical to the
+     monolith (`pending`/`processing`/`shipped`/`delivered`/`cancelled`,
+     default `pending`).
+  2. **`getAllOrders`/`updateOrderStatus`** (`order.controller.js`):
+     same pre-save enum validation as the monolith's `updateOrderStatus`
+     (confirmed necessary there - an invalid value would otherwise
+     surface as an uncaught-shape 500 via this file's generic catch
+     block, exactly like the monolith). `GET /api/orders/all` and
+     `PATCH /api/orders/:id/status` added to `order.route.js`, both
+     `protectRoute + adminRoute` gated; `/all` registered alongside the
+     existing `/summary` before `/:id` (both literal segments would
+     otherwise be swallowed by the `:id` pattern).
+  3. **New: User Service batch lookup, the one piece with no monolith
+     equivalent to port.** The monolith's `getAllOrders` used Mongoose's
+     `.populate("user", "name email")` - not portable here, since Order
+     Service only stores a raw user id and User lives in a completely
+     separate service/database (`.populate()` requires the referenced
+     model to be registered on the same connection, the same constraint
+     already documented for `populateOrderProducts`/Product Service).
+     No endpoint anywhere in this codebase could resolve a user id to
+     name/email outside its own service, so this session added one:
+     - `POST /api/auth/users/batch` on User Service
+       (`auth.controller.js#getUsersByIds`,
+       `User.find({ _id: { $in: ids } }).select("name email")`,
+       empty/missing `ids` short-circuits to `[]`) - same shape as
+       Product Service's existing `/products/batch`.
+     - **Gated by a new `requireInternalServiceKey` middleware**
+       (byte-copied from Coupon Service's), not left public like
+       Product's batch endpoint. Product's batch returns non-sensitive
+       catalog data; this endpoint returns name/email - PII - so it
+       follows Coupon Service's `/deactivate` precedent instead. This
+       makes the shared-secret-gating rule explicit and consistent
+       across all three: **Product's batch stays public** (non-sensitive
+       catalog data, gating would add friction for no protection gained);
+       **Coupon's `/deactivate` is shared-secret-gated** (a system
+       action, not a public read); **User's new batch is
+       shared-secret-gated** (a public read, but of PII, which the
+       read/write distinction alone doesn't cover) - one
+       data-sensitivity-driven pattern, not three unrelated decisions.
+     - `services/order-service/src/lib/userServiceClient.js`
+       (`getUsersByIds`, `UserServiceUnavailableError`) mirrors
+       `productServiceClient.js` exactly in shape - 5s timeout, same
+       error-wrapping convention.
+     - `INTERNAL_SERVICE_KEY` added to User Service's `.env`/`.env.example`
+       (didn't exist there before - only Coupon and Order Service had
+       it), copied byte-identical from Order Service's existing value
+       via a script rather than typed by hand, so the transcript never
+       displayed it. `USER_SERVICE_URL=http://localhost:5002` added to
+       Order Service's `.env`/`.env.example`.
+  4. **Two-tier fallback on User Service dependency failure - approved
+     as a refinement of the researcher's original instruction, and
+     worth being precise about for the dissertation's resilience
+     discussion.** Distinguishes *complete dependency failure* from
+     *partial data-resolution failure*, and further distinguishes
+     read-vs-write for how each is handled:
+     - **`getAllOrders` (pure read, nothing mutated):** a **total** User
+       Service outage (`UserServiceUnavailableError` - network error,
+       timeout, or non-2xx from the batch call itself) is **not**
+       swallowed - it fails loud, `500 { message: "User Service is
+       unavailable - cannot resolve order user details" }`. A **partial**
+       resolution gap (User Service reachable and responded, but a
+       specific user id simply isn't in the result - e.g. a deleted
+       account) degrades gracefully instead: that one row gets `{ name:
+       "Unknown User", email: "" }` via `populateOrderUsers`, without
+       affecting any other row or failing the request.
+     - **`updateOrderStatus` (a write that has already committed by the
+       time enrichment runs):** user enrichment is **always**
+       best-effort, including on total outage - a 500 at that point
+       would misleadingly suggest the status update itself failed when
+       it didn't. This is the same fail-fast-vs-best-effort principle
+       already established in this codebase for `createCheckoutSession`
+       (fails fast - nothing has happened yet) vs. `checkoutSuccess`
+       (best-effort - a Stripe payment is already confirmed, so the
+       order must never be lost); applied here to a second, independent
+       write path for the same underlying reason.
+  5. **`frontend-baseline/src/components/OrdersTab.jsx`:** ported from
+     the monolith's, using `orderApi` (`lib/api.js`) instead of a
+     relative axios path. One addition beyond a literal port: a visible
+     error state (`{error}` rendered in place of the table) for the new
+     `500` case above - the monolith's version never needed this, since
+     the monolith's `getAllOrders` has no dependency that can fail this
+     way. `AdminPage.jsx` wired in the same fourth tab, same icon/order
+     as the monolith.
+  6. `docs/services-overview.md` updated: User/Auth Service's row now
+     mentions the new shared-secret-gated batch endpoint; Order
+     Service's row now mentions the admin Order Overview endpoints and
+     their User Service dependency.
+- **Rationale:** "Closer to a port than a redesign" held for every piece
+  the monolith already had an equivalent for; the one piece it didn't
+  (cross-service user resolution) needed new, deliberately-scoped
+  infrastructure rather than a workaround, since Baseline's whole point
+  is to surface exactly these service-boundary costs honestly rather
+  than hide them. The two-tier fallback is recorded in detail because it
+  is a genuine, citable Baseline resilience pattern - one this project
+  didn't have an equivalent for elsewhere yet (the existing Product/Cart
+  outage handling is single-tier: always-503 for Cart, always-best-effort
+  for Order's product enrichment) - so it's evidence for, not just an
+  implementation detail of, the dissertation's Baseline-vs-Enhanced
+  resilience comparison.
+- **Alternatives considered:** Client-side composition (frontend calls
+  User Service directly for user lookups, mirroring the Analytics tab's
+  pattern) instead of a server-side Order Service → User Service call -
+  rejected, because the batch endpoint is shared-secret-gated
+  specifically so it can't be called from a browser; embedding
+  `INTERNAL_SERVICE_KEY` in frontend JS would expose it to any user via
+  devtools, defeating the entire point of the gate. Single-tier
+  best-effort for both `getAllOrders` and `updateOrderStatus` (uniform
+  with Product's pattern) - considered and initially proposed, but
+  rejected in favor of the two-tier design once the read-vs-write
+  distinction was made explicit, since silently degrading an admin
+  listing to all-unresolved on a total outage hides a real operational
+  problem an admin should see, whereas doing the same to a write
+  response that already succeeded would misrepresent what happened.
+- **Verification:** Ran User Service, Product Service, and Order Service
+  standalone against their real databases, plus `frontend-baseline/`'s
+  real dev server (Vite auto-selected port 5175, since two
+  monolith `frontend/` dev servers already occupied 5173/5174 - the
+  three test service instances were started with `CLIENT_URL` overridden
+  to 5175 via an env var for this session only, no `.env` files changed,
+  monolith processes on 5173/5174 left untouched throughout). Two
+  throwaway accounts (one promoted to admin via the same direct-DB-
+  promotion convention, against `user-service-db`), two real orders
+  created directly via `createOrder` across both accounts. Confirmed:
+  no cookie → 401, non-admin → 403 on both new Order Service endpoints;
+  `GET /api/orders/all` returns both orders with correctly resolved
+  `user.name`/`user.email` via the new cross-service call, alongside a
+  real pre-existing order already in `order-service-db`; `PATCH
+  .../status` 400s on an invalid value, 200s and persists on a valid
+  one. Killed User Service outright and re-hit both endpoints: `GET
+  /api/orders/all` → clean `500` with the expected message (not a hang,
+  not a generic crash); `PATCH .../status` → `200`, status genuinely
+  updated in the database, `user: { name: "Unknown User", email: "" }`
+  in the response - confirming the two-tier design exactly as
+  documented. Restarted User Service and confirmed `GET
+  /api/orders/all` immediately recovered to `200` with no other
+  intervention. Then drove the actual UI: Playwright + headless Chromium
+  against `frontend-baseline`'s real dev server - logged in as the
+  test admin, opened `/secret-dashboard`, clicked the new Orders tab,
+  confirmed via screenshot the table renders correctly styled with both
+  test orders and the pre-existing real order, side by side, names/
+  emails resolved; changed a row's status via the dropdown and confirmed
+  it persisted after a full reload plus re-clicking into the tab (same
+  tabs-are-local-state caveat as the monolith's own verification).
+  Checked console/network for regressions - the only errors seen were
+  the same pre-existing periodic `/api/auth/profile` 401 (unrelated,
+  already documented in the Stage 1 entry) and `ERR_CONNECTION_REFUSED`
+  against Cart Service on `:5003`, which was never started for this
+  session and isn't exercised by this feature. All test
+  accounts/orders deleted afterward; all three temporarily-started
+  service instances and `frontend-baseline`'s dev server stopped;
+  `backend/` and `frontend/` (the monolith) were not started, modified,
+  or otherwise touched at any point this session.
+- **Stage:** Baseline Microservices (mirrors
+  `v1.1-monolith-baseline`'s Stage 1 Order Overview entry above).

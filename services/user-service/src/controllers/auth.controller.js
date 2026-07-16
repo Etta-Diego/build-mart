@@ -183,3 +183,28 @@ export const getUserCount = async (req, res) => {
 		res.status(500).json({ message: "Server error", error: error.message });
 	}
 };
+
+// Service-to-service only (Order Service's admin Order Overview, to
+// resolve name/email for the admin listing - Order Service only stores a
+// raw user id, and .populate() can't cross a service/database boundary).
+// Gated by requireInternalServiceKey, not protectRoute - the caller is
+// another service, not an end user with their own token. Missing ids for
+// deleted/nonexistent users are simply absent from the response array,
+// not an error - the caller (Order Service) treats that as a per-record
+// resolution gap, not a service failure. See
+// ../middleware/internalService.middleware.js and docs/decision_log.md.
+export const getUsersByIds = async (req, res) => {
+	try {
+		const { ids } = req.body;
+
+		if (!Array.isArray(ids) || ids.length === 0) {
+			return res.json([]);
+		}
+
+		const users = await User.find({ _id: { $in: ids } }).select("name email");
+		res.json(users);
+	} catch (error) {
+		console.log("Error in getUsersByIds controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};

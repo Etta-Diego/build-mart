@@ -1,5 +1,6 @@
 import Order from "../models/order.model.js";
 import { getProductsByIds, ProductServiceUnavailableError } from "../lib/productServiceClient.js";
+import { getUsersByIds, UserServiceUnavailableError } from "../lib/userServiceClient.js";
 
 // Replaces the monolith's Order.find(...).populate("products.product", ...)
 // - Mongoose's .populate() requires the referenced model to be registered
@@ -37,6 +38,29 @@ async function populateOrderProducts(order) {
 	}));
 
 	return plainOrder;
+}
+
+// Resolves each order's raw `user` id to { _id, name, email } via User
+// Service's batch endpoint - Order Service has no User model of its own to
+// .populate() against, same cross-service constraint as
+// populateOrderProducts above. Unlike that function, this one does NOT
+// swallow UserServiceUnavailableError itself - it lets a total-outage
+// error propagate to the caller, which decides fail-loud-vs-best-effort
+// based on whether a mutation has already committed (see getAllOrders vs
+// updateOrderStatus below, and docs/decision_log.md). A user id that User
+// Service successfully looked up but simply didn't find (deleted/
+// nonexistent account) is a different, per-record case - not an error,
+// resolved here as a graceful "Unknown User" placeholder so one bad
+// record doesn't blank out an otherwise-good field on its row.
+async function populateOrderUsers(plainOrders) {
+	const userIds = [...new Set(plainOrders.map((order) => order.user.toString()))];
+	const users = await getUsersByIds(userIds);
+	const userMap = new Map(users.map((user) => [user._id, user]));
+
+	return plainOrders.map((order) => ({
+		...order,
+		user: userMap.get(order.user.toString()) || { _id: order.user.toString(), name: "Unknown User", email: "" },
+	}));
 }
 
 export async function createOrder(session) {
@@ -86,6 +110,91 @@ export const getUserOrders = async (req, res) => {
 		res.json(await Promise.all(orders.map(populateOrderProducts)));
 	} catch (error) {
 		console.log("Error in getUserOrders controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
+// Admin-only, mirrors the monolith's getAllOrders (see backend/controllers/
+// order.controller.js). A pure read - nothing has been mutated yet - so a
+// total User Service outage fails loud (500) rather than silently
+// returning a listing with every user unresolved; a per-record resolution
+// gap (one deleted/nonexistent account among otherwise-healthy results)
+// still degrades gracefully to "Unknown User" for just that row via
+// populateOrderUsers. See docs/decision_log.md for why this differs from
+// updateOrderStatus's always-best-effort approach below.
+export const getAllOrders = async (req, res) => {
+	try {
+		const orders = await Order.find({}).sort({ createdAt: -1 });
+		const withProducts = await Promise.all(orders.map(populateOrderProducts));
+
+		let withUsers;
+		try {
+			withUsers = await populateOrderUsers(withProducts);
+		} catch (error) {
+			if (error instanceof UserServiceUnavailableError) {
+				console.log("User Service unavailable while populating order users (failing loud):", error.message);
+				return res.status(500).json({ message: "User Service is unavailable - cannot resolve order user details" });
+			}
+			throw error;
+		}
+
+		res.json(withUsers);
+	} catch (error) {
+		console.log("Error in getAllOrders controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
+const ORDER_STATUSES = ["pending", "processing", "shipped", "delivered", "cancelled"];
+
+// Admin-only, mirrors the monolith's updateOrderStatus - same pre-save
+// enum validation, confirmed necessary there (an invalid value would
+// otherwise fall through to this file's generic catch block as an
+// uncaught-shape 500 instead of a clean 400). Unlike getAllOrders, user
+// enrichment here is ALWAYS best-effort, including on a total User Service
+// outage: the status write has already committed to the database by the
+// time enrichment runs for the response, so a 500 at this point would
+// misleadingly suggest the update itself failed when it didn't. See
+// docs/decision_log.md.
+export const updateOrderStatus = async (req, res) => {
+	try {
+		const { status } = req.body;
+
+		if (!ORDER_STATUSES.includes(status)) {
+			return res.status(400).json({
+				message: `Invalid status. Must be one of: ${ORDER_STATUSES.join(", ")}`,
+			});
+		}
+
+		const order = await Order.findById(req.params.id);
+
+		if (!order) {
+			return res.status(404).json({ message: "Order not found" });
+		}
+
+		order.status = status;
+		await order.save();
+
+		const withProducts = await populateOrderProducts(order);
+
+		let populatedOrder;
+		try {
+			[populatedOrder] = await populateOrderUsers([withProducts]);
+		} catch (error) {
+			if (error instanceof UserServiceUnavailableError) {
+				console.log(
+					"User Service unavailable while populating order user for status update (write already committed; returning best-effort):",
+					error.message
+				);
+				populatedOrder = { ...withProducts, user: { _id: withProducts.user.toString(), name: "Unknown User", email: "" } };
+			} else {
+				throw error;
+			}
+		}
+
+		res.json(populatedOrder);
+	} catch (error) {
+		console.log("Error in updateOrderStatus controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });
 	}
 };
