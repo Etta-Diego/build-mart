@@ -79,4 +79,22 @@ export const useProductStore = create((set) => ({
 			console.log("Error fetching featured products:", error);
 		}
 	},
+	searchProducts: async (query) => {
+		// Guard lives here, not in the caller - this is the one place that
+		// decides whether the network is hit at all, regardless of whether
+		// the caller is Navbar's debounced input or a direct visit to a bare
+		// /search URL with no query.
+		if (!query || !query.trim()) {
+			set({ products: [] });
+			return;
+		}
+		set({ loading: true });
+		try {
+			const response = await axios.get(`/products/search?q=${encodeURIComponent(query.trim())}`);
+			set({ products: response.data, loading: false });
+		} catch (error) {
+			set({ error: "Failed to search products", loading: false });
+			toast.error(error.response?.data?.error || "Failed to search products");
+		}
+	},
 }));

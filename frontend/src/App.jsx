@@ -5,6 +5,7 @@ import SignUpPage from "./pages/SignUpPage";
 import LoginPage from "./pages/LoginPage";
 import AdminPage from "./pages/AdminPage";
 import CategoryPage from "./pages/CategoryPage";
+import SearchResultsPage from "./pages/SearchResultsPage";
 
 import Navbar from "./components/Navbar";
 import { Toaster } from "react-hot-toast";
@@ -52,6 +53,7 @@ dark:bg-[radial-gradient(ellipse_at_top,rgba(249,115,22,0.25)_0%,rgba(17,24,39,0
 						element={user?.role === "admin" ? <AdminPage /> : <Navigate to='/login' />}
 					/>
 					<Route path='/category/:category' element={<CategoryPage />} />
+					<Route path='/search' element={<SearchResultsPage />} />
 					<Route path='/cart' element={user ? <CartPage /> : <Navigate to='/login' />} />
 					<Route
 						path='/purchase-success'

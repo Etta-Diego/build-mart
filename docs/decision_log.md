@@ -1675,3 +1675,170 @@ Written for direct reuse in the dissertation's methodology chapter.
   or otherwise touched at any point this session.
 - **Stage:** Baseline Microservices (mirrors
   `v1.1-monolith-baseline`'s Stage 1 Order Overview entry above).
+
+### [2026-07-16] Search feature, Monolith first
+- **Decision:** Added product search to `backend/` and `frontend/` only,
+  per this project's rule that new features land in the monolith first.
+  1. **`GET /api/products/search?q=<query>`** (`product.controller.js`
+     #searchProducts, public, no auth - matches the existing public
+     browsing routes). Empty/missing `q` (after `.trim()`) returns `[]`
+     immediately with no database call. Otherwise, `Product.find({ $or:
+     [...] })` across `name`/`description`/`category`, each a
+     case-insensitive (`$options: "i"`) `$regex`. Registered in
+     `product.route.js` alongside the other public GET routes - no
+     ordering conflict, since this router has no GET `/:id` for
+     `/search` to collide with.
+  2. **Regex-escaping.** A small inline `escapeRegExp` helper escapes
+     `.*+?^${}()|[]\` in `q` before it becomes a `$regex` pattern - the
+     query is a literal substring search from the user's point of view,
+     and an unescaped special character (most plausibly a parenthesis,
+     given real product names like "PVC Plumbing Pipe (6m length)")
+     would either throw or silently change what's matched. Confirmed
+     directly (not assumed) that this is a real, not theoretical, gap:
+     a raw `Product.find({ name: { $regex: "(6m", $options: "i" } })`
+     against the real database throws `MongoServerError: Regular
+     expression is invalid: missing closing parenthesis` - exactly the
+     failure this escaping prevents, reproduced with the fix removed
+     and confirmed absent with it in place.
+  3. **Frontend:** new `frontend/src/pages/SearchResultsPage.jsx` -
+     *not* a reuse of `ProductsList.jsx` (the admin product-management
+     table, wrong reuse target entirely) but a near-mirror of
+     `CategoryPage.jsx`'s existing pattern (`useSearchParams` in place
+     of `useParams`, same `ProductCard` grid), since that's the
+     customer-facing grid this app already has. Distinguishes two empty
+     states: no `q` at all ("Type something to search") vs. `q` present
+     with zero results ("No products found"). New `searchProducts`
+     action in `useProductStore.js` is the single place that decides
+     whether the network is hit at all - `if (!query?.trim())` sets
+     `products: []` and returns before any `axios` call, regardless of
+     whether the caller is the debounced input or a direct visit to a
+     bare `/search` URL.
+  4. **Debounce, `Navbar.jsx`.** New search `<input>`, visible
+     unconditionally on every page (not gated on login/role). A
+     `SEARCH_DEBOUNCE_MS = 300` module-level named constant (not an
+     inline magic number, per explicit instruction) drives a
+     `useEffect`/`setTimeout` keyed on the raw input value: only the
+     value still current 300ms after the last keystroke triggers
+     `navigate(\`/search?q=...\`, { replace: true })`; every keystroke
+     before that clears and resets the pending timeout. `replace: true`
+     avoids pushing one browser-history entry per debounced keystroke
+     while refining a query already on the results page. An empty
+     (trimmed) value makes the effect return early - no navigation, no
+     fetch, and clearing the input while on `/search` leaves the last
+     results in place rather than forcing a blank state. Debouncing
+     (Navbar, "when to update the URL") and fetching (`SearchResultsPage`
+     `useEffect` keyed on the URL's `q`, mirroring `CategoryPage`) are
+     deliberately separate concerns, same separation already established
+     by `CategoryPage`/`fetchProductsByCategory`.
+- **Rationale:** Reusing `CategoryPage.jsx`'s exact shape (URL-param-
+  driven fetch, `ProductCard` grid) rather than inventing a new rendering
+  approach keeps this feature visually and structurally consistent with
+  the rest of the app's product-browsing pages, and keeps the "empty
+  query" guard in exactly one place (the store action) so it holds
+  regardless of entry point, rather than being re-implemented at every
+  call site. Escaping regex special characters is boundary input
+  validation on a public, unauthenticated endpoint - exactly the kind of
+  validation this project's own conventions call for at a system
+  boundary, not an over-engineered addition.
+- **Alternatives considered:** A live-search dropdown rendered directly
+  from `Navbar.jsx` (no dedicated results page/route) - rejected, since
+  the researcher's spec explicitly asked for a results *view*, and a
+  URL-addressable `/search?q=...` route is also directly shareable/
+  bookmarkable, unlike dropdown state trapped in the navbar. Reusing
+  `ProductsList.jsx` - rejected outright once clarified that component is
+  the **admin** product-management table (edit/delete/toggle-featured),
+  not a customer-facing grid; reusing it for public search results would
+  have been a real design error, not a stylistic choice.
+- **Verification:** Backend tested directly against the real, already-
+  running monolith (confirmed the running process started *after* these
+  edits were saved, not before, learning directly from this session's
+  earlier credential-rotation lesson about stale in-process state).
+  Confirmed: case-insensitive substring match works across all three
+  fields - a `q=cement` search correctly returned every product in the
+  `cement` category *and* all three `Reinforcement Steel Rod` products,
+  which don't mention "cement" in their category or description at all;
+  investigated rather than assumed this was a bug, and confirmed it's
+  actually correct - the word "reinforce**cement**" (from the product
+  name "Reinforcement Steel Rod") genuinely contains "cement" as a
+  literal substring. Confirmed a description-only match (`q=drainage
+  installations`, present in one product's description but not its name
+  or category) returns exactly that product. Confirmed missing `q`,
+  `q=`, and whitespace-only `q` all return `[]`, not all 27+ seeded
+  products. Confirmed the exact parenthesis case explicitly requested -
+  `q=(6m` and `q=Pipe (6m length)` both return `200` with the correct
+  product, not a `500`. Then drove the real frontend (Playwright,
+  headless Chromium, against the actual already-running Vite dev
+  server) with network-request logging: typing "pip" fired **zero**
+  requests immediately and at +150ms (still inside the 300ms window),
+  then exactly one navigation/fetch at +450ms; continuing to type
+  "e (6m)" to refine the query while already on the results page fired
+  zero requests mid-typing and exactly one after the debounce resettled,
+  landing on `/search?q=pipe%20(6m` and correctly rendering "PVC
+  Plumbing Pipe (6m length)" - the parenthesis case working through the
+  actual UI, not just curl. Clearing the input afterward fired zero
+  further requests. Visiting a bare `/search` URL directly (no `q` at
+  all) fired zero network requests and rendered the "Type something to
+  search" empty state. One irregularity investigated rather than
+  dismissed: the very first debounced navigation fired **two** identical
+  requests instead of one; confirmed `frontend/src/main.jsx` wraps the
+  app in `<StrictMode>`, which intentionally double-invokes effects on a
+  component's *initial* mount in development only (never production) -
+  consistent with the observed pattern, since the second, subsequent
+  query refinement (no remount involved) fired exactly once. Not a
+  debounce defect. `services/` and `frontend-baseline/` were not
+  touched at any point this session.
+- **Stage:** Monolith (feature-parity rule: Baseline/Enhanced mirroring
+  deferred to a future session, same sequencing as Order Overview above).
+
+### [2026-07-16] Search follow-up: category dropped from searchable fields
+- **Decision:** Removed `category` from `searchProducts`'s `$or` -
+  search now matches `name` and `description` only. `escapeRegExp` and
+  the case-insensitive `$options: "i"` approach are unchanged for the
+  two remaining fields.
+- **Rationale (principled, not a reproduced-bug fix - see below):**
+  Category values in this schema are internal slugs (`"roofing-sheet"`,
+  `"wall-paints"`, `"water-tank"`, etc.), not customer-facing prose -
+  they exist to drive `/category/:category` browsing and admin
+  filtering, not to be read or searched as natural-language text. Making
+  them substring-searchable risks exactly the class of problem this
+  session already found once with unescaped regex characters: an
+  internal implementation detail (a slug's exact spelling/hyphenation)
+  leaking into and unpredictably shaping user-facing search results, in
+  a way a customer typing a plain-language query has no way to
+  anticipate or reason about. Category-based discovery isn't lost -
+  it remains fully available via the existing `/category/:category`
+  browsing feature this app already has; this is a correction of *where*
+  that capability belongs, not a removal of it.
+- **Correction to how this issue was raised:** it was initially
+  described (by the researcher, based on a report to them) as a
+  specific, already-observed false positive - a `q=pipe` search
+  incorrectly returning a `roofing-sheet`-category product. Before
+  making this change, that specific example was checked directly against
+  the real, full 27-product dataset (via the admin `GET /api/products`
+  endpoint, not just the public browsing endpoints, to rule out
+  anything hidden from those): `q=pipe` and `q=pipes` both returned only
+  the 4 legitimate `pipes`-category products, both before and after this
+  change, and `"roofing-sheet"` contains no letter `p` at all, making
+  that specific substring match structurally impossible. The researcher
+  confirmed, once shown this, that the specific example was inaccurate -
+  not a bug that was actually observed and reproduced. This entry
+  therefore documents dropping `category` as a **principled design
+  decision** (stated above), not as the fix for a verified false
+  positive - recorded precisely so this isn't later cited as evidence of
+  a bug that was never actually confirmed to exist.
+- **Alternatives considered:** Keep `category` in the search but anchor
+  or restrict the match somehow (e.g. exact match only, or a
+  separate/lower-weighted result tier) - rejected as unnecessary
+  complexity for a field that already has a dedicated, better-suited
+  browsing path (`/category/:category`); simply excluding it from
+  free-text search is the smaller, more predictable change.
+- **Verification:** Re-ran `q=pipe` against the updated implementation -
+  confirmed the same 4 legitimate `pipes`-category products
+  (`PVC Plumbing Pipe`, `PVC Drainage Pipe`, `Copper Water Pipe`,
+  `Flexible Conduit Pipe`), matched via `name`, with `category` no
+  longer part of the query at all. Re-ran both parenthesis-escaping
+  cases from the original verification (`q=(6m` and `q=Pipe (6m
+  length)`) to confirm the regex-escaping fix and the two-field query
+  still behave correctly together - no regression from removing the
+  third `$or` clause.
+- **Stage:** Monolith.
