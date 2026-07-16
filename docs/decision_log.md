@@ -844,3 +844,122 @@ Written for direct reuse in the dissertation's methodology chapter.
   equivalent in isolation to the per-service MongoDB databases —
   explicitly rejected; documented instead as a named limitation.
 - **Stage:** Baseline Microservices
+
+### [2026-07-16] Coupon Service extracted; new /deactivate endpoint gets a shared-secret gate, unlike Product Service's public batch read
+- **Decision:** Extracted the fourth of five Stage 2 services,
+  `services/coupon-service/`. `coupon.model.js` and the two existing
+  handlers (`getCoupon`, `validateCoupon`) were copied unchanged in
+  logic from the monolith — same pattern as Product Service, no
+  data-layer rewrite (unlike Cart Service). Confirmed by reading the
+  monolith's files in full first: `coupon.route.js` has no public
+  routes at all (`GET /` and `POST /validate` are both `protectRoute`-
+  gated already), so unlike Product Service's extraction, there was no
+  "disabled pending Auth Service" gap to create — Coupon Service ships
+  fully live from the start.
+  - **New addition: `PATCH /api/coupons/deactivate`.** Also re-checked
+    `payment.controller.js` (still monolith/future-Order-Service logic,
+    not moved) to ground this in real behavior: `checkoutSuccess`
+    currently runs `Coupon.findOneAndUpdate({ code, userId }, { isActive:
+    false })` directly against the Coupon model, and never checks the
+    result — a missing/already-deactivated coupon is a normal, expected
+    outcome there, not an error. The new endpoint mirrors that exact
+    query shape and that exact tolerance (`200 { deactivated: false,
+    coupon: null }` on no match, never a 404/500), so it's a drop-in
+    replacement for that inline call once Order Service exists and can
+    call INTO Coupon Service instead of touching its database directly
+    — built and verified standalone now, the same way Product Service's
+    batch endpoint was built ahead of Cart Service needing it.
+  - **`requireInternalServiceKey` — a shared-secret gate, deliberately
+    different from Product Service's public batch endpoint.** Product
+    Service's `POST /api/products/batch` is a public **read** with no
+    gate, "same trust level as the other public product routes."
+    `PATCH /api/coupons/deactivate` is a **write** on payment-adjacent
+    data, so it gets a lightweight check instead: a required
+    `X-Internal-Service-Key` header, compared against a new
+    `INTERNAL_SERVICE_KEY` env var — a *separate* secret from
+    `ACCESS_TOKEN_SECRET`/`REFRESH_TOKEN_SECRET`, with no relationship
+    to user identity, role, or session (the middleware file's own header
+    comment says this explicitly, so the distinction is visible at the
+    point a future reader would actually encounter it, not just in this
+    log). Missing or mismatched key → `401` (matching this project's
+    existing convention: 401 for "no/invalid credential presented," 403
+    reserved for `adminRoute`'s "valid credential, insufficient role" —
+    a wrong internal-service key is the former category, not the
+    latter), checked before the database is touched. Implemented as its
+    own middleware file (`internalService.middleware.js`), not folded
+    into `auth.middleware.js`, so that file stays the one thing it's
+    always been (byte-identical, duplicated-everywhere, stateless JWT
+    verification) without an unrelated secondary concern grafted onto
+    it.
+  - This is Baseline's **deliberately minimal** answer to "how does one
+    service trust a call from another service" — not real service
+    identity, not fine-grained per-caller authorization, just a shared
+    string that keeps this one write endpoint from being callable by
+    arbitrary public requests. It is explicitly **not** intended as a
+    durable pattern to repeat ad hoc on every future write endpoint
+    across five-plus services; it's recorded here as a stopgap with a
+    named successor: the API Gateway in the **Enhanced Microservices**
+    stage is expected to formalize inter-service trust **centrally**
+    (the Gateway authorizes service-to-service calls in one place),
+    rather than each service inventing and maintaining its own
+    shared-secret convention. That contrast — an ad hoc, per-endpoint
+    secret at Baseline vs. a centralized, Gateway-mediated mechanism at
+    Enhanced — is itself one of the concrete, citable architectural
+    differences this dissertation's Baseline-vs-Enhanced comparison is
+    structured to surface, not an incidental implementation detail.
+  - `scripts/migrate-coupons.js`: same idempotent-by-`_id`,
+    additive-only pattern as the other migration scripts. `buildmart.
+    coupons` was confirmed empty (0 documents) before writing this
+    script; run once, correctly reported "0 documents, nothing to
+    migrate" as an expected, successful outcome rather than an error
+    path, source untouched.
+- **Rationale:** The read/write distinction is the load-bearing one
+  here: a public read endpoint returning product catalog data carries
+  negligible risk if called by anyone, while an unauthenticated public
+  endpoint that can flip `isActive: false` on any user's coupon by
+  guessing a `{ code, userId }` pair is a real (if low-severity)
+  integrity gap on data adjacent to the highest-risk code path in this
+  project (payment/checkout, per `CLAUDE.md`). A minimal shared-secret
+  check closes that gap without inventing a heavier mechanism
+  (mTLS, per-service tokens, a service registry) that Baseline hasn't
+  earned yet and that would just be replaced by the Gateway at Enhanced
+  anyway.
+- **Verification:** Ran User/Auth Service and Coupon Service standalone.
+  Signed up a fresh test user, then inserted a real coupon directly
+  (mirroring `createNewCoupon`'s exact shape — `GIFT...` code, 10%,
+  30-day expiry) referencing that user's real `_id`, since there's no
+  create-coupon route in `coupon.controller.js` itself (that logic
+  correctly stays in the payment flow). Confirmed `GET /api/coupons`
+  and `POST /api/coupons/validate` both work correctly against this
+  real data, `validate` 404s on a wrong code, and `GET /api/coupons`
+  401s with no session cookie. Then the three explicit auth cases for
+  `/deactivate`, as specified: **no header at all** → `401`, coupon's
+  `isActive` confirmed still `true` afterward (no accidental mutation
+  on a rejected request); **a wrong key that is itself a
+  plausible-looking random hex string of the same length/format as the
+  real one** (not an obviously-fake string like `"wrongkey123"`) → also
+  `401`, `isActive` still `true` — confirming the comparison is a
+  genuine exact-match check, not accidentally truthy on any non-empty
+  string; **the correct key** → `200 { deactivated: true, ... }`,
+  `isActive` confirmed `false` immediately after via `GET
+  /api/coupons` correctly returning `null` (no active coupon). Test
+  coupon and test user deleted afterward; both test service instances
+  stopped; `backend/` (the monolith) was not touched.
+- **Alternatives considered:** Leaving `/deactivate` public, matching
+  Product Service's batch endpoint exactly for consistency — rejected
+  once the read/write distinction was made explicit; consistency for
+  its own sake isn't a reason to leave a write endpoint open when the
+  read/write line is the actual determinant of risk. `protectRoute`
+  (end-user JWT) on `/deactivate` instead, with Order Service
+  forwarding the original caller's session cookie — rejected as a
+  workable but awkward fit: it would couple a conceptually
+  service-to-service call to "must carry a specific end user's live
+  session," a pattern used nowhere else in this project, for a route
+  that isn't really about who the end user is. A heavier
+  service-identity mechanism (mTLS, signed service tokens, a service
+  registry) — rejected as over-engineering for what the Baseline stage
+  needs, and because the Enhanced-stage Gateway is the more appropriate
+  place for that investment.
+- **Stage:** Baseline Microservices (Coupon Service, the `/deactivate`
+  endpoint, and the shared-secret gate); the Gateway-formalizes-this
+  contrast is a forward reference to Enhanced Microservices
