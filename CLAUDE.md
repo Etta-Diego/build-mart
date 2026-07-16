@@ -29,6 +29,16 @@ resource utilisation under load).
 - Deployment: Stage 1 (monolith) runs as a plain Node.js process, NOT 
   containerized — this is an intentional scope decision. Containerisation 
   begins at Stage 2 (Baseline Microservices).
+- Auth (Stage 2/3): stateless JWT verification ("Option A") — each 
+  service verifies the access token's signature locally against a shared 
+  ACCESS_TOKEN_SECRET and trusts the decoded { userId, role } claims 
+  directly. No per-request database lookup, no cross-service call, not 
+  even from User/Auth Service's own routes. Tradeoff: role changes 
+  propagate on next login/token refresh, not instantly. Centralized, 
+  always-current authorization is deferred to the API Gateway in Stage 3.
+- auth.middleware.js is duplicated (not imported/shared) into every 
+  service that needs it — deliberate service independence, not a 
+  code-sharing oversight.
 
 ## Current stack
 Node.js, Express, MongoDB/Mongoose, Redis (ioredis), Stripe, Cloudinary, 
