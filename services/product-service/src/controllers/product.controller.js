@@ -176,6 +176,33 @@ export const toggleFeaturedProduct = async (req, res) => {
 	}
 };
 
+function escapeRegExp(string) {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export const searchProducts = async (req, res) => {
+	try {
+		const q = (req.query.q || "").trim();
+
+		if (!q) {
+			return res.json([]);
+		}
+
+		const pattern = escapeRegExp(q);
+		const products = await Product.find({
+			$or: [
+				{ name: { $regex: pattern, $options: "i" } },
+				{ description: { $regex: pattern, $options: "i" } },
+			],
+		});
+
+		res.json(products);
+	} catch (error) {
+		console.log("Error in searchProducts controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
 async function updateFeaturedProductsCache() {
 	try {
 		// The lean() method  is used to return plain JavaScript objects instead of full Mongoose documents. This can significantly improve performance

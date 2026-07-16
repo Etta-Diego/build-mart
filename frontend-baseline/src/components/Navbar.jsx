@@ -1,13 +1,21 @@
-import { Moon, Sun, ShoppingCart, UserPlus, LogIn, LogOut, Lock } from "lucide-react";
+import { Moon, Sun, ShoppingCart, UserPlus, LogIn, LogOut, Lock, Search } from "lucide-react";
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useUserStore } from "../stores/useUserStore";
 import { useCartStore } from "../stores/useCartStore";
+
+// How long to wait after the user stops typing before navigating to the
+// search results page - keeps a keystroke from firing a request on every
+// character. Named so it's easy to find/tune later, not a magic number
+// buried in the effect below.
+const SEARCH_DEBOUNCE_MS = 300;
 
 const Navbar = () => {
 	const { user, logout } = useUserStore();
 	const isAdmin = user?.role === "admin";
 	const { cart } = useCartStore();
+	const navigate = useNavigate();
+	const [searchInput, setSearchInput] = useState("");
 	const [darkMode, setDarkMode] = useState(
 	localStorage.getItem("theme") === "dark"
 );
@@ -21,6 +29,17 @@ useEffect(() => {
 		localStorage.setItem("theme", "light");
 	}
 }, [darkMode]);
+
+useEffect(() => {
+	const trimmed = searchInput.trim();
+	if (!trimmed) return;
+
+	const timeoutId = setTimeout(() => {
+		navigate(`/search?q=${encodeURIComponent(trimmed)}`, { replace: true });
+	}, SEARCH_DEBOUNCE_MS);
+
+	return () => clearTimeout(timeoutId);
+}, [searchInput, navigate]);
 
 	return (
 		<header className='fixed top-0 left-0 w-full bg-gray-900 bg-opacity-90 backdrop-blur-md shadow-lg z-40 transition-all duration-300 border-b border-orange-300'>
@@ -38,6 +57,17 @@ useEffect(() => {
 						>
 							Home
 						</Link>
+						<div className='relative'>
+							<Search className='absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none' />
+							<input
+								type='text'
+								value={searchInput}
+								onChange={(e) => setSearchInput(e.target.value)}
+								placeholder='Search products...'
+								className='pl-8 pr-3 py-1.5 rounded-md bg-gray-700 text-white placeholder-gray-400 text-sm
+								focus:outline-none focus:ring-2 focus:ring-orange-500 w-40 sm:w-56'
+							/>
+						</div>
 						<button
 	onClick={() => setDarkMode(!darkMode)}
 	className='p-2 rounded-md bg-gray-700 hover:bg-gray-600 transition'

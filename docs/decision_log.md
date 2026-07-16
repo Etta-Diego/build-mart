@@ -1842,3 +1842,97 @@ Written for direct reuse in the dissertation's methodology chapter.
   still behave correctly together - no regression from removing the
   third `$or` clause.
 - **Stage:** Monolith.
+
+### [2026-07-16] Search feature, Stage 2 (Baseline Microservices): ported from the monolith, plus a race-condition fix new to Baseline
+- **Decision:** Mirrored the monolith's tagged `v1.2-monolith-baseline`
+  Search feature (see the two Stage 1 entries above, including the
+  category-exclusion correction) into Product Service and
+  `frontend-baseline/`. A direct port for everything the monolith already
+  had verified, plus one genuine fix introduced only in Baseline this
+  session - not present in `v1.2-monolith-baseline` - see below.
+  1. **`GET /api/products/search?q=<query>`** - `escapeRegExp` and
+     `searchProducts` ported verbatim into
+     `services/product-service/src/controllers/product.controller.js`,
+     byte-identical logic to the monolith's v1.2 version (`name`+
+     `description` only, `$options: "i"`, empty `q` short-circuits to
+     `[]`). Route added to `product.route.js` alongside the other public
+     GET routes - no ordering conflict, this router has no GET `/:id`
+     either.
+  2. **`frontend-baseline` port** - `Navbar.jsx` gets the same search
+     `<input>` and the same `SEARCH_DEBOUNCE_MS = 300` named constant/
+     debounced-navigation effect as the monolith; new
+     `SearchResultsPage.jsx` mirrors the monolith's (itself a mirror of
+     `CategoryPage.jsx`'s pattern); `useProductStore.js` gets a
+     `searchProducts` action calling `productApi` instead of a
+     monolith-relative `axios` instance.
+  3. **New in Baseline, not a straight port: `AbortController`-based
+     request cancellation in `searchProducts`.** A module-scoped
+     `searchAbortController` variable in `useProductStore.js`; every call
+     aborts whatever search is still in flight before starting a new one,
+     and the `catch` block silently ignores the resulting
+     `ERR_CANCELED` rejection rather than surfacing it as a failed
+     search. This closes a real race condition, distinct from - and
+     initially misdescribed as - a "stale closure" in the debounce
+     `useEffect` itself: the debounce hook (`[searchInput, navigate]`
+     deps) was already correctly scoped and re-runs fresh on every
+     keystroke, with no staleness bug. The actual risk lives one level
+     down, in `SearchResultsPage`'s effect (`searchProducts(q)` on every
+     `q` change): each debounced navigation fires a new search request,
+     and without cancellation, an older, slower response arriving after
+     a newer, faster one would silently overwrite `products` with
+     stale, mismatched results - exactly the scenario "search again
+     without navigating away" exercises. Fixed once, centrally, in the
+     store action - the same place the empty-query guard already lives -
+     rather than at either call site.
+  4. **This same race condition exists, unfixed, in the monolith's
+     tagged `v1.2-monolith-baseline`** (`frontend/src/stores/
+     useProductStore.js` has the identical no-cancellation pattern).
+     Per this session's explicit scope, `backend/`/`frontend/` were not
+     touched to fix it - flagged here as a concrete, worth-doing
+     follow-up for a future monolith-focused session, not silently left
+     undiscovered. Baseline is not "ahead" of the monolith by design
+     here; this is an incidental correctness improvement made during a
+     mirror, the same category of thing as the two-tier User Service
+     fallback added during the Order Overview Stage 2 mirror.
+- **Rationale:** Porting verbatim where the monolith is already correct
+  (the regex-escaping fix especially - re-deriving it from scratch would
+  risk reintroducing the exact parenthesis bug already fixed and
+  verified in Stage 1) avoids doing already-finished design work twice.
+  The `AbortController` fix belongs in Baseline now because it was
+  identified and confirmed during this session's build, not because
+  Baseline categorically needs more resilience than the monolith -
+  recording the monolith's matching gap explicitly prevents this from
+  reading as an intentional architectural difference between the two
+  when it's actually just sequencing (found here first, not fixed there
+  yet).
+- **Verification:** Ran Product Service standalone against its real
+  database - confirmed `q=pipe` returns the same 4 `pipes`-category
+  products as the monolith, `q=(6m` and `q=Pipe (6m length)` both return
+  the correct product (not a `500`), and missing/empty `q` returns `[]`.
+  Then drove the real `frontend-baseline` dev server with Playwright
+  (Vite auto-selected port 5175 again, since 5173/5174 were occupied by
+  pre-existing monolith `frontend/` processes left untouched; Product
+  Service was started with `CLIENT_URL` overridden to 5175 for this
+  session only, no `.env` file changes, same pattern as the Order
+  Overview Stage 2 verification): confirmed the debounce fires zero
+  requests until 300ms after the last keystroke; confirmed the
+  parenthesis case renders correctly through the actual UI; confirmed a
+  bare `/search` visit and a cleared input both fire zero requests.
+  **Explicitly exercised the race-condition scenario the `AbortController`
+  fix targets:** searched "pipe" (results correctly showed `PVC Plumbing
+  Pipe...`), then, without navigating away, cleared the box and searched
+  "cement" - confirmed exactly one new request fired, the URL updated to
+  `q=cement`, the results correctly showed only cement products (`Portland
+  Cement`, `White Cement`, `Waterproof Cement`, plus the same
+  "Reinforcement Steel Rod" substring match already verified in Stage 1),
+  and the prior query's `PVC Plumbing Pipe` result was completely gone -
+  not lingering, not flashing back in. Also observed, as an incidental
+  confirmation the cancellation logic works correctly: the
+  network log showed one of the two `<StrictMode>` mount-time duplicate
+  requests for the first search being cleanly aborted by the second, the
+  same mechanism doing double duty. All temporary service/dev-server
+  instances stopped afterward; `backend/` and `frontend/` were not
+  started, modified, or otherwise touched this session.
+- **Stage:** Baseline Microservices (mirrors both Stage 1 Search entries
+  above; the `AbortController` fix is Baseline-first, flagged for the
+  monolith as noted).

@@ -8,6 +8,7 @@ import {
 	getProductsByBatch,
 	getProductsByCategory,
 	getRecommendedProducts,
+	searchProducts,
 	toggleFeaturedProduct,
 } from "../controllers/product.controller.js";
 import { adminRoute, protectRoute } from "../middleware/auth.middleware.js";
@@ -27,6 +28,7 @@ router.get("/count", protectRoute, adminRoute, getProductCount);
 router.get("/featured", getFeaturedProducts);
 router.get("/category/:category", getProductsByCategory);
 router.get("/recommendations", getRecommendedProducts);
+router.get("/search", searchProducts);
 // Public, same trust level as the other read-only product routes above -
 // used by Cart Service (and any future service) to resolve full product
 // details for a set of IDs in one round trip instead of N individual calls.
