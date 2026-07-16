@@ -117,6 +117,22 @@ export const getRecommendedProducts = async (req, res) => {
 	}
 };
 
+export const getProductsByBatch = async (req, res) => {
+	try {
+		const { ids } = req.body;
+
+		if (!Array.isArray(ids) || ids.length === 0) {
+			return res.json([]);
+		}
+
+		const products = await Product.find({ _id: { $in: ids } });
+		res.json(products);
+	} catch (error) {
+		console.log("Error in getProductsByBatch controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
 export const getProductsByCategory = async (req, res) => {
 	const { category } = req.params;
 	try {

@@ -12,8 +12,8 @@ services also use.
 
 | Service | Port | Database | Status |
 |---|---|---|---|
-| Product Service | 5001 | `product-service-db` | Extracted, verified. Admin routes (create/delete/toggle-featured/list-all) live as of the User/Auth Service retrofit. |
-| User/Auth Service | 5002 | `user-service-db` | Extracted, verified. Issues stateless JWTs (`{ userId, role }` in both access and refresh tokens); `auth.middleware.js` duplicated into Product Service. |
-| Cart Service | — | — | Not yet extracted. |
+| Product Service | 5001 | `product-service-db` | Extracted, verified. Admin routes (create/delete/toggle-featured/list-all) live as of the User/Auth Service retrofit. Also exposes `POST /api/products/batch` (public) for Cart Service's product-detail lookups. |
+| User/Auth Service | 5002 | `user-service-db` | Extracted, verified. Issues stateless JWTs (`{ userId, role }` in both access and refresh tokens); `auth.middleware.js` duplicated into Product Service and Cart Service. |
+| Cart Service | 5003 | Redis only, no MongoDB — key prefix `cart:*` on the same shared Redis instance as Product/User Service (see decision_log.md for the shared-instance limitation) | Extracted, verified. Rewritten (not copied) as a Redis Hash (`cart:{userId}`, field=productId, value=quantity); calls Product Service's batch endpoint to resolve full product details, with a deliberate `503` if Product Service is unreachable. |
 | Order Service | — | — | Not yet extracted. |
 | Coupon Service | — | — | Not yet extracted. |

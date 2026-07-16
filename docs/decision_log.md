@@ -620,3 +620,227 @@ Written for direct reuse in the dissertation's methodology chapter.
   about and audit, not two special-cased variants that could silently
   drift apart.
 - **Stage:** Baseline Microservices
+
+### [2026-07-16] Monolith audited for four performance optimizations; confirmed absent codebase-wide — applying to Baseline AND Enhanced, not Enhanced-only
+- **Decision:** Before implementing MongoDB indexes, pagination, HTTP
+  compression, and `Promise.all` parallel calls anywhere in Stage 2/3,
+  audited the original monolith (`backend/`) for existing instances of
+  each. Findings, checked across the *entire* codebase, not just the
+  specific endpoints later targeted for optimization:
+  - **Indexes:** grepped every model file for `index:`/`.index()`. The
+    only indexes that exist anywhere are incidental side effects of
+    `unique: true` constraints (`user.model.js` email,
+    `order.model.js` stripeSessionId, `coupon.model.js` code/userId) —
+    none added for query performance. `product.model.js` has zero
+    indexes of any kind, despite `category` and `isFeatured` both being
+    query filters in `product.controller.js`. No index on `Order.user`
+    either, despite `getUserOrders` filtering on it.
+  - **Pagination:** grepped `limit|skip|page` across every controller —
+    zero matches anywhere in `backend/`. `getAllProducts` and
+    `getProductsByCategory` both return their full, unbounded result
+    sets unconditionally; no endpoint in the monolith paginates
+    anything.
+  - **HTTP compression:** no `compression` package in `package.json`,
+    no compression middleware in `server.js`'s middleware stack
+    (`metricsMiddleware` → `express.json()` → `cookieParser()`).
+    Completely absent.
+  - **`Promise.all` parallel calls:** grepped `Promise\.all` across
+    `backend/` — zero occurrences anywhere in the codebase. Clearest
+    concrete miss: `analytics.route.js:9,14` awaits
+    `getAnalyticsData()` then `getDailySalesData()` sequentially despite
+    their being independent; inside `getAnalyticsData` itself
+    (`analytics.controller.js:6-7`), `User.countDocuments()` and
+    `Product.countDocuments()` are also awaited sequentially despite
+    being independent.
+  - **Conclusion:** the monolith has **none** of these four
+    optimizations, codebase-wide, not just at the endpoints later
+    targeted. Applying them to Product/User/Cart/Order/Coupon Services
+    in both Baseline and Enhanced Microservices is therefore genuinely
+    new implementation work being introduced at Stage 2 — not carrying
+    forward, extending, or "catching up to" any optimization the
+    monolith already had. This empirically confirms **Comparison A
+    (Monolith vs. Baseline)** was never at risk of being confounded by
+    this dimension (the monolith simply never had it to lose or keep).
+  - Given that starting point, these four optimizations are being
+    applied identically to **both Baseline and Enhanced Microservices**,
+    not Enhanced-only. They are implementation-quality improvements
+    (indexing, pagination, compression, concurrency) that don't depend
+    on anything architectural to Enhanced (Kubernetes, API Gateway,
+    Redis-as-cache, CI/CD) — applying them Enhanced-only would let
+    **Comparison B (Baseline vs. Enhanced)** attribute performance gains
+    to "architecture" that were actually just implementation quality,
+    confounding the comparison this dissertation is structured around.
+    Applying them to both isolates Comparison B to the architectural
+    variables it's actually meant to measure (orchestration, gateway,
+    caching, CI/CD), with implementation quality held constant across
+    both sides.
+  - React lazy loading (frontend route/component code-splitting) is
+    the fifth optimization approved alongside these four, but is
+    **frontend-only and architecture-independent** — it doesn't touch
+    or depend on which backend stage (Monolith/Baseline/Enhanced) the
+    frontend is talking to, so there's no Baseline/Enhanced split to
+    reason about for it. Applied once, consistently, regardless of
+    backend target.
+  - **Sequencing:** implementation of all five optimizations is
+    deliberately deferred until after Cart, Order, and Coupon Services
+    are extracted (Stage 2's five services complete), then done as one
+    dedicated optimization pass applied uniformly across all five
+    services (Baseline) and, separately, Enhanced — rather than
+    optimizing each service piecemeal as it's extracted. This avoids
+    doing the same optimization work twice (once now, once again after
+    the remaining three services exist) and keeps the "uniform
+    treatment" property easy to verify in one pass rather than having
+    to audit for consistency after the fact.
+- **Rationale:** the "fair starting point" reasoning for Comparison B
+  was stated as a precaution before this audit; the audit converts it
+  into an empirically grounded claim — there is now a documented,
+  reproducible check (not an assumption) that the monolith's baseline
+  state for these four dimensions is uniformly absent, which is exactly
+  what's needed to say with confidence that neither comparison in this
+  dissertation is confounded by implementation-quality drift.
+- **Alternatives considered:** Apply the four backend optimizations to
+  Enhanced Microservices only, treating them as part of what makes
+  Enhanced "enhanced" — rejected per the reasoning above, since none of
+  the four require anything architectural to Enhanced and applying them
+  asymmetrically would misattribute their performance contribution to
+  architecture in Comparison B. Implement optimizations service-by-service
+  as each is extracted, rather than one pass at the end — rejected as
+  more error-prone (harder to guarantee uniform treatment across five
+  services extracted at different times) and redundant work.
+- **Stage:** Baseline Microservices and Enhanced Microservices (backend
+  four); All stages, frontend-only (lazy loading)
+
+### [2026-07-16] Cart Service extracted as a Redis Hash — genuine rewrite, not a copy; Product Service gains a batch lookup endpoint
+- **Decision:** Extracted the third of five Stage 2 services,
+  `services/cart-service/`. Unlike Product/User Service, this was a
+  deliberate rewrite, not a content-preserving copy: cart data moves from
+  being embedded in `User.cartItems` (MongoDB, an array of `{ product,
+  quantity }` subdocuments) to a Redis Hash the Cart Service owns
+  outright (a data store, not a cache — consistent with the "Cart
+  extracted to Redis in Stage 2" decision already on record above).
+  - **Key/value design:** `cart:{userId}` as a Redis **Hash**, field =
+    productId, value = quantity — chosen over a single String key
+    holding a JSON-serialized array. The Hash gives atomic
+    add/increment (`HINCRBY`, one round trip, no read-modify-write race
+    under concurrent requests) and, more importantly, makes the exact
+    bug class Phase 1 had to fix defensively **structurally
+    unrepresentable**: a hash field *is* the product id, so there is no
+    state where a quantity exists without a valid product reference.
+    `cart.controller.js`'s new top-of-file comment (and this entry)
+    both note explicitly that the monolith's `getValidCartItems()`
+    defensive filter has no equivalent here — not because the concern
+    was dropped, but because the new data structure cannot hold the
+    malformed shape that filter was guarding against.
+  - **Four operations rewritten:** `addToCart` → `HINCRBY`;
+    `getCartProducts` → `HGETALL` then resolve full product details via
+    Product Service's new batch endpoint; `removeAllFromCart` → `HDEL`
+    (one field) or `DEL` (whole cart, `productId` absent, matching the
+    monolith's behavior); `updateQuantity` → `HEXISTS` check (preserves
+    the monolith's 404-if-not-in-cart), then `HSET` (exact value) or
+    `HDEL` (quantity `0`, matching the monolith's zero-quantity-removes
+    behavior).
+  - **Product Service addition (prerequisite, added and verified
+    standalone first):** `POST /api/products/batch`, body `{ ids: [...]
+    }`, running `Product.find({ _id: { $in: ids } })`. Public, same
+    trust level as the other read-only product routes — it's a lookup,
+    not a mutation. Empty/missing `ids` short-circuits to `[]` without
+    touching MongoDB.
+  - **Cart Service → Product Service call:** native `fetch` (Node 20 has
+    it built in), not `axios` — checked first: `axios` exists only in
+    `frontend/package.json` for browser calls to this app's own backend;
+    no backend code (monolith or any service) had ever made an outbound
+    service-to-service HTTP call before this, so there was no backend
+    precedent either way, and native `fetch` needs no new dependency.
+    `PRODUCT_SERVICE_URL` is an env var (`.env.example`), never
+    hardcoded, since it changes when services move to
+    containers/Kubernetes.
+  - **Deliberate 503 on Product Service outage:** `getProductsByIds()`
+    (`src/lib/productServiceClient.js`) wraps the `fetch` call in a
+    5-second `AbortController` timeout and converts *any* failure to
+    get a usable response — network error or non-2xx — into a
+    `ProductServiceUnavailableError`. `getCartProducts` catches that
+    specific error and returns `503 { message: "Product Service is
+    unavailable..." }`. This is Baseline's documented, intentional
+    failure mode under a dependency outage — specified precisely,
+    because Enhanced will later be evaluated partly on resilience
+    improvements (e.g. a circuit breaker, retries, or caching resolved
+    product details) over this exact behavior, and that comparison only
+    means something if Baseline's own failure mode is itself
+    deliberate and recorded, not incidental.
+  - **Confirmed Mongo-free:** re-read `cart.controller.js` in full before
+    starting — it only ever touched `req.user.cartItems` (populated by
+    the monolith's DB-fetched `User` document, not owned by cart logic
+    itself) and the `Product` model (now replaced by the batch HTTP
+    call). No other Mongoose model, no other MongoDB reference anywhere
+    in the cart flow. Cart Service has **no `db.js`, no `models/`
+    folder, no `mongoose` dependency** — Redis-only, confirmed rather
+    than assumed.
+  - **Shared Redis instance — an accepted limitation, not a design
+    choice on equal footing with per-service MongoDB databases.** Cart
+    Service's Hash-per-user keys (`cart:*`) live on the **same physical
+    Redis instance** as Product Service's `featured_products` cache and
+    User Service's `refresh_token:*` keys — there is no per-service
+    Redis database/instance the way there is a separate `product-
+    service-db`/`user-service-db` for MongoDB. Isolation is by key-prefix
+    convention only. This is a genuine, worth-naming limitation of the
+    current Baseline setup, not a deliberate architectural parity with
+    the per-service MongoDB isolation elsewhere in this project — a
+    Redis outage or a key-prefix collision would affect all three
+    services simultaneously, in a way a MongoDB outage on
+    `product-service-db` alone would not affect `user-service-db`.
+    Recorded here explicitly so it isn't mistaken for an intentional,
+    equally-strong isolation boundary when this baseline is compared
+    against Enhanced later.
+  - `scripts/migrate-carts.js`: read every `buildmart.users` document
+    with a non-empty `cartItems` array, filtered to only well-formed
+    items (`product` field present — the same validity check as Phase
+    1's `getValidCartItems()`, applied here once as the migration's own
+    filter rather than carried into the new controller, since the new
+    Hash structure has no way to represent a malformed entry anyway),
+    and `HSET` each valid item into Redis under the new key structure.
+    Run once: 1 user had a non-empty cart, 2 valid items migrated, 0
+    malformed items dropped, `buildmart` left untouched.
+- **Rationale:** Redis Hash was chosen specifically because it maps the
+  data-integrity property Phase 1 had to enforce defensively (every
+  cart entry has a valid product reference) onto something the storage
+  layer itself guarantees, rather than something application code has
+  to keep re-checking. The deliberate-503 requirement exists because
+  Cart Service is the first service in this project with a genuine
+  runtime dependency on another service being reachable — how that
+  dependency fails needs to be as precisely specified as how it
+  succeeds, since "Baseline vs. Enhanced" resilience claims later in
+  this dissertation are only meaningful relative to a documented
+  starting behavior.
+- **Verification:** Ran all three services (Product, User, Cart)
+  standalone against real infrastructure. Added a product twice via the
+  real `POST /api/cart` and confirmed the quantity incremented to 2 in
+  Redis directly (`HGETALL`); confirmed the same user's document in
+  `buildmart` was untouched (user only exists in `user-service-db`,
+  proving no accidental dual-write). `GET /api/cart` correctly resolved
+  full product details with merged quantities via the batch call. Then
+  **killed Product Service outright** and re-hit `GET /api/cart` with
+  the same session: `503` in 98ms (not a hang, not a generic 500), with
+  a clear log line on the Cart Service side; restarted Product Service
+  and confirmed `GET /api/cart` immediately worked again with no other
+  intervention. Exercised `updateQuantity` (exact-value set, 404 on a
+  product not in the cart, quantity-`0` removal),
+  `removeAllFromCart` (single-product `HDEL` and whole-cart `DEL`, both
+  verified against Redis directly), and confirmed Redis auto-deletes a
+  hash key once its last field is removed (no dangling empty-hash key
+  left behind). Confirmed the real migrated cart (from
+  `migrate-carts.js`) was untouched by any of this. Test user and its
+  Redis key deleted afterward; all three test service instances
+  stopped; `backend/` (the monolith) was not touched.
+- **Alternatives considered:** A String key holding a JSON-serialized
+  array (mirroring the monolith's own in-memory shape most closely) —
+  rejected per the Hash-vs-String tradeoff above: no atomic
+  increment, and no structural protection against reintroducing the
+  same malformed-shape bug class. Having `getCartProducts` retry or
+  silently return a stale/empty result on a Product Service outage —
+  rejected in favor of an explicit `503`, since silently degrading
+  would misrepresent what actually happened to a caller and would make
+  it harder to attribute a later Enhanced-stage resilience improvement
+  to something concrete. Treating the shared Redis instance as
+  equivalent in isolation to the per-service MongoDB databases —
+  explicitly rejected; documented instead as a named limitation.
+- **Stage:** Baseline Microservices

@@ -4,6 +4,7 @@ import {
 	deleteProduct,
 	getAllProducts,
 	getFeaturedProducts,
+	getProductsByBatch,
 	getProductsByCategory,
 	getRecommendedProducts,
 	toggleFeaturedProduct,
@@ -23,6 +24,10 @@ router.get("/", protectRoute, adminRoute, getAllProducts);
 router.get("/featured", getFeaturedProducts);
 router.get("/category/:category", getProductsByCategory);
 router.get("/recommendations", getRecommendedProducts);
+// Public, same trust level as the other read-only product routes above -
+// used by Cart Service (and any future service) to resolve full product
+// details for a set of IDs in one round trip instead of N individual calls.
+router.post("/batch", getProductsByBatch);
 router.post("/", protectRoute, adminRoute, createProduct);
 router.patch("/:id", protectRoute, adminRoute, toggleFeaturedProduct);
 router.delete("/:id", protectRoute, adminRoute, deleteProduct);
