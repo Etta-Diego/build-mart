@@ -963,3 +963,197 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Baseline Microservices (Coupon Service, the `/deactivate`
   endpoint, and the shared-secret gate); the Gateway-formalizes-this
   contrast is a forward reference to Enhanced Microservices
+
+### [2026-07-16] Order Service extracted — the fifth and final Stage 2 service; orchestrates Cart/Coupon (not Product) at checkout, adds a Coupon-creation endpoint, and establishes a project-wide fail-fast-vs-best-effort principle
+- **Decision:** Extracted the fifth and final Stage 2 service,
+  `services/order-service/`. `order.model.js` and `createOrder`/
+  `getOrderById`/`getUserOrders` (already extracted from the payment
+  controller back in Phase 1) were ported cleanly; `payment.controller.js`
+  (`createCheckoutSession`, `checkoutSuccess`, `createStripeCoupon`,
+  `createNewCoupon`) required genuine redesign, since it orchestrates
+  Stripe plus three other domains. Read every relevant monolith file in
+  full before designing anything, per this project's established
+  extraction discipline, which surfaced two real discrepancies from the
+  initially assumed design (both resolved with explicit sign-off before
+  any file was written) and one real bug found only during end-to-end
+  verification (fixed and documented below).
+  - **Discrepancy 1 — Cart/Product Service are not actually called
+    anywhere in the current checkout flow.** `createCheckoutSession`
+    builds Stripe line items straight from client-submitted
+    `req.body.products` (name/image/**price**, trusted verbatim) — there
+    is no "get cart" call and no Product Service price/detail lookup
+    anywhere in the monolith's payment path. **Decision: preserve this
+    exactly**, in both Baseline and Enhanced — do not add server-side
+    cart/price validation now or later as part of this extraction work.
+    This is a real, pre-existing trust gap (a malicious client could
+    submit an arbitrary price), left deliberately unfixed and recorded
+    here as a limitation for the dissertation's Limitations/Future Work
+    discussion, not as an oversight. Closing it would be a genuine
+    security hardening of the highest-risk code path in this project,
+    which is out of scope for a task whose job is to preserve behavior
+    across an architectural boundary, not change it.
+  - **Discrepancy 2 — only one new Coupon Service endpoint was actually
+    needed.** The existing `POST /api/coupons/validate` already has
+    identical semantics to `createCheckoutSession`'s inline coupon check
+    and already returns the one field needed (`discountPercentage`), so
+    it's reused as-is, token-forwarded. The only genuinely new
+    requirement was coupon *creation* for the ≥$200 reward
+    (`createNewCoupon`). **New endpoint: `POST /api/coupons`**
+    (`coupon-service`), `protectRoute`-gated (token-forwarded, per the
+    researcher's instinct, confirmed correct after reading the actual
+    logic), porting `createNewCoupon`'s exact logic (unconditionally
+    replace any existing coupon for the user, grant `GIFT`+random/10%/
+    30-day) verbatim into Coupon Service's own controller - moved there
+    because it's coupon-domain *write* logic, not order-domain logic.
+    `userId` is derived from `req.user._id` (the token), not the request
+    body - unlike `/deactivate`, which is body-supplied `userId` since
+    it has no live user session to derive from. This gives Coupon
+    Service a clean, principled split: `/validate` and the new `/`
+    (create) are both token-derived; `/deactivate` alone is
+    shared-secret/body-supplied, matching exactly which of the three
+    routes has a live end-user session available at its call site.
+  - **Reordering in `createCheckoutSession`:** all calls to other
+    services (coupon validation, reward-coupon creation) now happen
+    **before** the Stripe checkout session is created, not after, as in
+    the monolith. `totalAmount` is fully known before Stripe is ever
+    called - nothing in the original logic actually required the
+    reward-coupon check to run after session creation, it just happened
+    to be written that way. Reordering means a dependency outage always
+    fails before any Stripe side effect exists, instead of risking an
+    orphaned, never-returned-to-the-client Stripe session (which Stripe
+    would eventually expire on its own, but which is still a worse
+    outcome than never creating it).
+  - **The general fail-fast-vs-best-effort principle** (requested to be
+    recorded explicitly, not just as a local exception): **fail-fast
+    applies before the costly/irreversible action** (here, the Stripe
+    charge) — a dependency outage during `createCheckoutSession` returns
+    a clean `503` immediately, no partial state, nothing created.
+    **Best-effort-with-logging applies after that action** — inside
+    `checkoutSuccess`, Stripe has *already* confirmed payment by the
+    time the handler runs; failing the response at that point over a
+    Coupon or Cart Service outage would tell a genuinely paying customer
+    their payment didn't go through, **and** silently drop the Order
+    record, which is a strictly worse outcome than a coupon staying
+    active a little longer or a cart not auto-clearing. Concretely:
+    `createOrder(session)` runs **first** in `checkoutSuccess` (zero
+    external dependency - it only reads `session.metadata`, the
+    price/product snapshot captured at checkout-creation time, never
+    re-fetched from Product Service, confirmed by reading the code);
+    coupon deactivation and cart-clearing are then attempted
+    best-effort, each wrapped in its own try/catch that logs and
+    continues rather than failing the response. This divergence from
+    the fail-fast rule used everywhere else in this project is scoped
+    specifically to *after* Stripe has confirmed payment - the
+    determining factor is irreversibility of the preceding action, not
+    which handler it happens to be in.
+  - **Bug found only during end-to-end verification, fixed the same
+    session:** `getOrderById`/`getUserOrders` used Mongoose's
+    `.populate("products.product", ...)`, which requires the referenced
+    model (`Product`) to be registered in the *same* Mongoose
+    connection - true in the monolith (single process, one connection),
+    false now that Product lives in its own service with its own
+    database. The very first real `GET /api/orders/:id` call in
+    verification returned `500 Schema hasn't been registered for model
+    "Product"`, immediately surfacing this. This was missed during
+    planning because the earlier "Order Service doesn't need Product
+    Service" conclusion was correct for the payment/checkout handlers
+    (confirmed: they never touch Product Service) but the read handlers
+    were not separately traced for the same concern. **Fix:** added
+    `productServiceClient.js` (same pattern as Cart Service's, batch
+    lookup, 5s timeout) used *only* by `order.controller.js`'s two read
+    endpoints; `.populate()` calls replaced with an explicit batch fetch
+    + manual merge, matching how Cart Service already solves the
+    identical "resolve product details for a stored reference" problem.
+    Made **best-effort**, not fail-fast: if Product Service is down, a
+    `GET /api/orders/:id` call still returns the order with its own
+    immutable price/quantity snapshot intact, just without live
+    name/image - reading already-existing, already-paid order history
+    should not be blocked by a display-enhancement dependency being
+    temporarily down, the same reasoning as the fail-fast-vs-best-effort
+    principle above, applied to a read rather than a post-payment write.
+    `PRODUCT_SERVICE_URL` was consequently added back to
+    `.env.example`/`.env`, with an explicit comment clarifying it's used
+    by the read endpoints only, never by payment logic.
+  - `scripts/migrate-orders.js`: 1 real document confirmed in
+    `buildmart.orders` before writing the script (from earlier Phase 1
+    checkout E2E testing) - not assumed. Run once: 1 inserted, target
+    count verified equal to source, source untouched.
+- **Rationale:** The fail-fast-vs-best-effort split is the single most
+  important design decision in this extraction because it's the first
+  place in this project where a service's own internal logic (not just
+  its extraction boundary) had to reason about *when* a downstream
+  failure is acceptable to swallow versus when it must propagate - every
+  prior service's failure handling was uniformly fail-fast because
+  nothing in Product/User/Cart/Coupon Service's own logic had yet done
+  anything irreversible before calling out to another service. Order
+  Service is the first (and, by this project's design, only) service
+  that wraps a real external side effect (an actual Stripe charge) that
+  cannot be undone by anything the rest of the request does - so this is
+  recorded as a general principle precisely because the same reasoning
+  will apply anywhere a future stage adds another irreversible action
+  ahead of dependent side effects, not just here.
+- **Verification:** Ran all five Baseline services together standalone
+  for the first time. Full real flow: signup, add-to-cart via Cart
+  Service, `createCheckoutSession` (confirmed correct Stripe line
+  items/metadata), a full real Stripe test-mode payment via
+  browser automation (`4242 4242 4242 4242`, confirmed
+  `payment_status: "paid"` directly via the Stripe API), `checkoutSuccess`
+  → correct `Order` created, cart correctly cleared. Repeated with a
+  coupon: created a real reward coupon by checking out ≥$200, confirmed
+  `10%` discount correctly applied on a second, coupon-code checkout
+  (`$12.99` → `$11.69`), completed that payment for real too, and
+  confirmed the coupon was deactivated (`GET /api/coupons` → `null`)
+  after `checkoutSuccess`. Explicit fail-fast/best-effort tests, adapted
+  from what was originally specified since the actual dependency graph
+  differs from what was assumed (see below): confirmed
+  `createCheckoutSession` is **completely unaffected** by a Cart Service
+  outage (proving zero dependency, as designed) - killed Coupon Service
+  instead (its real dependency) and confirmed all three cases behave
+  correctly: coupon code present → `503`; no coupon, total under
+  threshold → succeeds normally (dependency never triggered); no coupon,
+  total over threshold (reward path) → `503`. Then, with Coupon Service
+  restarted and **Cart Service still down**, ran a real
+  paid-session through `checkoutSuccess` and confirmed `200`, a
+  correctly-created Order, and the exact expected log line
+  ("Best-effort cart clear failed after payment succeeded (order still
+  created)") - the best-effort design working exactly as specified. All
+  test data (orders, coupons, users) deleted afterward; the one real
+  migrated order confirmed untouched (still exactly 1 document); all
+  five service instances stopped; `backend/` (the monolith) was not
+  touched.
+  - **Note on the originally-specified fail-fast test:** the
+    instruction was to test "Cart Service outage during
+    createCheckoutSession specifically" - but per Discrepancy 1 above,
+    `createCheckoutSession` never calls Cart Service at all in the
+    approved design, so that exact test is inapplicable by construction
+    (confirmed by running it: zero effect, as expected). The
+    *substantively* equivalent tests - fail-fast against
+    `createCheckoutSession`'s actual dependency (Coupon Service) and
+    best-effort against `checkoutSuccess`'s actual Cart Service
+    dependency - were run instead, covering the same underlying
+    question (does this handler's designed failure-handling strategy
+    actually work under a real outage) via the correct call sites.
+  - Also observed one transient, non-reproducing `503` (a slow first
+    cross-process connection during the reward-coupon call, well within
+    normal flakiness already seen elsewhere in this project - e.g. the
+    first `migrate-carts.js` Atlas connection attempt) - immediate retry
+    succeeded in 2s; not a code defect, the timeout-then-clean-error
+    mechanism did exactly what it was designed to do.
+- **Alternatives considered:** Keep the >=$200 reward-coupon check after
+  Stripe session creation, matching the monolith's exact original
+  ordering - rejected in favor of the reorder above, since it exists
+  purely to avoid an orphaned-session failure mode with no behavioral
+  cost to the success path. Apply strict fail-fast inside
+  `checkoutSuccess` too, exactly as originally specified for every other
+  service - rejected explicitly (see Rationale) as the one place in this
+  project where literal fail-fast produces a worse outcome than the
+  partial-fallback it's meant to prevent. Add server-side cart/price
+  validation now, closing the client-trust gap as part of this
+  extraction - rejected as scope creep into a deliberate behavior
+  change on the highest-risk code path; recorded as a known limitation
+  instead.
+- **Stage:** Baseline Microservices (this extraction); the
+  fail-fast-before/best-effort-after-the-irreversible-action principle
+  is written to generalize to Enhanced Microservices as well, wherever
+  an irreversible external action is introduced ahead of dependent
+  side effects.

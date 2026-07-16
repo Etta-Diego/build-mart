@@ -36,8 +36,42 @@ export const validateCoupon = async (req, res) => {
 	}
 };
 
-// New in Coupon Service - not present in the monolith. Mirrors the exact
-// findOneAndUpdate query payment.controller.js#checkoutSuccess currently
+// New in Coupon Service - not present in the monolith. Ports
+// payment.controller.js#createNewCoupon's exact logic (grant a 10%,
+// 30-day "GIFT" coupon, unconditionally replacing any existing coupon for
+// the user - same as the original, which never checked whether the
+// existing coupon was still active/unused before deleting it) verbatim,
+// moved here since it's coupon-domain write logic, not order-domain
+// logic. userId comes from req.user._id (the forwarded token), not the
+// request body - unlike deactivateCoupon below, this route is
+// protectRoute-gated (token-forwarded), not shared-secret, since it's
+// triggered by a live user's own checkout, not a system-only side
+// effect with no user session available. Order Service decides WHEN to
+// call this (the >=$200 threshold is order-domain business logic);
+// Coupon Service owns WHAT the reward looks like.
+export const createCoupon = async (req, res) => {
+	try {
+		const userId = req.user._id;
+
+		await Coupon.findOneAndDelete({ userId });
+
+		const newCoupon = new Coupon({
+			code: "GIFT" + Math.random().toString(36).substring(2, 8).toUpperCase(),
+			discountPercentage: 10,
+			expirationDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+			userId,
+		});
+
+		await newCoupon.save();
+
+		res.status(201).json(newCoupon);
+	} catch (error) {
+		console.log("Error in createCoupon controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
+// Mirrors the exact findOneAndUpdate query payment.controller.js#checkoutSuccess currently
 // runs directly against the Coupon model ({ code, userId } -> isActive:
 // false), so this is a drop-in replacement for that call once Order
 // Service exists and can call INTO Coupon Service instead of touching its
