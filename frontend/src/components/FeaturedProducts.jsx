@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { ShoppingCart, ChevronLeft, ChevronRight } from "lucide-react";
 import { useCartStore } from "../stores/useCartStore";
+import { useUserStore } from "../stores/useUserStore";
 
 const FeaturedProducts = ({ featuredProducts }) => {
 	const [currentIndex, setCurrentIndex] = useState(0);
 	const [itemsPerPage, setItemsPerPage] = useState(4);
 
 	const { addToCart } = useCartStore();
+	const { user } = useUserStore();
+	const isAdmin = user?.role === "admin";
 
 	useEffect(() => {
 		const handleResize = () => {
@@ -57,14 +60,16 @@ const FeaturedProducts = ({ featuredProducts }) => {
 											<p className='text-yellow-400 font-medium mb-4'>
 												${product.price.toFixed(2)}
 											</p>
+											{!isAdmin && (
 											<button
 												onClick={() => addToCart(product)}
-												className='w-full bg-orange-500 hover:bg-orange-600 text-gray-900 dark:text-white font-semibold py-2 px-4 rounded transition-colors duration-300 
+												className='w-full bg-orange-500 hover:bg-orange-600 text-gray-900 dark:text-white font-semibold py-2 px-4 rounded transition-colors duration-300
 												flex items-center justify-center'
 											>
 												<ShoppingCart className='w-5 h-5 mr-2' />
 												Add to Cart
 											</button>
+										)}
 										</div>
 									</div>
 								</div>

@@ -5,6 +5,7 @@ import { useCartStore } from "../stores/useCartStore";
 
 const ProductCard = ({ product }) => {
 	const { user } = useUserStore();
+	const isAdmin = user?.role === "admin";
 	const { addToCart } = useCartStore();
 	const handleAddToCart = () => {
 		if (!user) {
@@ -30,14 +31,16 @@ const ProductCard = ({ product }) => {
 						<span className='text-3xl font-bold text-orange-500'>${product.price}</span>
 					</p>
 				</div>
-				<button
-					className='flex items-center justify-center rounded-lg bg-orange-500 px-5 py-2.5 text-center text-sm font-medium
-					 text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-yellow-400'
-					onClick={handleAddToCart}
-				>
-					<ShoppingCart size={22} className='mr-2' />
-					Add to cart
-				</button>
+				{!isAdmin && (
+					<button
+						className='flex items-center justify-center rounded-lg bg-orange-500 px-5 py-2.5 text-center text-sm font-medium
+						 text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-yellow-400'
+						onClick={handleAddToCart}
+					>
+						<ShoppingCart size={22} className='mr-2' />
+						Add to cart
+					</button>
+				)}
 			</div>
 		</div>
 	);

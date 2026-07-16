@@ -64,7 +64,7 @@ const ProductsList = () => {
 										/>
 									</div>
 									<div className='ml-4'>
-										<div className='text-sm font-medium text-white'>{product.name}</div>
+										<div className='text-sm font-medium text-gray-900 dark:text-white'>{product.name}</div>
 									</div>
 								</div>
 							</td>
