@@ -1157,3 +1157,166 @@ Written for direct reuse in the dissertation's methodology chapter.
   is written to generalize to Enhanced Microservices as well, wherever
   an irreversible external action is introduced ahead of dependent
   side effects.
+
+### [2026-07-16] frontend-baseline/ created; per-service CORS added; Analytics reimplemented as client-side aggregation across three new per-service summary endpoints
+- **Decision:** Duplicated `frontend/` into a new sibling `frontend-baseline/`
+  (genuine copy - `robocopy /E`, excluding `node_modules`/`dist`, then an
+  independent `npm install` - not a shared or symlinked folder), on this
+  branch, dedicated to talking to the five Baseline Microservices instead
+  of the monolith. `frontend/` itself was not touched (confirmed via `git
+  status` before and after - zero changes).
+  - **Why a genuine copy, not conditional routing in one shared
+    frontend:** the same reasoning as every backend service duplication
+    in this project (`auth.middleware.js` copied into five services
+    rather than imported once) - independence, stage-specific
+    configuration, and avoiding one codebase trying to branch its
+    behavior across three fundamentally different backend topologies
+    (one origin for the monolith, five origins for Baseline, one Gateway
+    origin for Enhanced) with runtime conditionals. A shared frontend
+    with `if (stage === "baseline")` branches throughout its data layer
+    would make every future change touch code paths for stages it
+    doesn't apply to, and would make it impossible to point Stage 1/2/3
+    benchmarking at a frontend build that's unambiguously "this stage's
+    frontend." **This pattern will repeat once more**: a
+    `frontend-enhanced/` copy, pointed at the Stage 3 API Gateway's
+    single origin, is expected when Enhanced Microservices work begins.
+  - **`lib/axios.js` (single instance, single baseURL) replaced by
+    `lib/api.js`** (five named instances - `productApi`, `userApi`,
+    `cartApi`, `couponApi`, `orderApi` - built from one shared factory
+    function). Read `axios.js` and all seven files that imported it
+    before changing anything, to map every call site to the actual
+    service it talks to (`useUserStore.js` → User/Auth; `useProductStore.js`,
+    `PeopleAlsoBought.jsx` → Product; `useCartStore.js` → both Cart *and*
+    Coupon, split by call; `OrderSummary.jsx`, `PurchaseSuccessPage.jsx`
+    → Order). No routing-helper indirection - every call site already
+    knows statically which service it needs, so five plain exports is
+    simpler than a dynamic dispatcher and matches this project's
+    stated anti-over-engineering stance.
+  - **The token-refresh-retry interceptor was generalized from
+    one instance to all five.** In the monolith, one baseURL meant one
+    interceptor sufficed. Under Baseline's stateless JWT design, *any*
+    of the five services can independently return `401` on an expired
+    access token (each verifies locally, none defers to another) - so
+    the interceptor (still owned by `useUserStore.js`, since it's
+    fundamentally an auth concern) is now attached to all five
+    instances via a loop. The refresh call itself always goes through
+    `userApi` (the only service that issues tokens); the retry of the
+    original failed request replays on whichever instance it originally
+    failed on, preserving that instance's own baseURL.
+  - **Real, empirically-discovered blocker: none of the five backend
+    services had CORS configured** (confirmed - no `cors` package
+    anywhere, same as the monolith). Verified this with a real
+    cross-origin `fetch` test in an actual Chrome browser (via
+    Playwright) before proposing a fix: a page on one origin calling
+    Product Service with credentials was blocked (`Failed to fetch`).
+    **Fixed by adding real `cors` middleware to all five services**
+    (`app.use(cors({ origin: process.env.CLIENT_URL, credentials: true
+    }))`, restricted to the frontend's own origin, not a wildcard,
+    since credentials are involved) - not a Vite dev-server proxy
+    (the monolith's `frontend/vite.config.js` already has one, unused
+    since `axios.js` calls an absolute URL, not a relative one).
+    **This was a deliberate methodological choice, not just the
+    path of least resistance**: a proxy would have made the
+    cross-origin problem disappear from the browser's perspective
+    without it ever having existed in a real deployment sense, masking
+    a genuine architectural characteristic of a gateway-less Baseline -
+    every service that a browser client talks to directly must handle
+    CORS itself. This is a **third citable Baseline-vs-Enhanced
+    contrast** (alongside the shared-secret/Gateway-trust point from
+    Coupon Service's `/deactivate`, and the caching point already on
+    record): Enhanced's Gateway consolidates every service behind one
+    origin, eliminating the need for per-service CORS entirely.
+    `frontend-baseline/vite.config.js`'s now-inapplicable proxy stanza
+    was removed (not left as dead, misleading config pointing at the
+    monolith's port).
+  - **Analytics reimplemented as client-side aggregation, not left
+    broken.** `AnalyticsTab.jsx` calls `/analytics`, but per `CLAUDE.md`
+    analytics is explicitly *not* a Stage 2 domain service - it's a
+    composition/aggregation layer, and Baseline has no Gateway yet to
+    host that composition. Rather than leave the admin dashboard
+    non-functional, three small new endpoints were added, each to the
+    service that already owns the relevant data (the same "each
+    service exposes a summary of its own data" pattern already
+    established, not new analytics logic embedded in a domain service):
+    `GET /api/auth/count` (User Service, `User.countDocuments()`),
+    `GET /api/products/count` (Product Service, `Product.countDocuments()`),
+    and `GET /api/orders/summary` (Order Service, porting the
+    sales/revenue aggregate and the full 7-day `getDailySalesData`
+    logic from the monolith's `analytics.controller.js` verbatim, since
+    Order Service already owns all the data needed for both with no
+    cross-service call). All three are `protectRoute`+`adminRoute`-gated,
+    matching the monolith's single `/analytics` route's trust level.
+    `order.route.js` required care: `GET /summary` had to be registered
+    **before** `GET /:id`, or Express would match `"summary"` as an
+    order id - verified explicitly by hitting both routes after the
+    change. `AnalyticsTab.jsx` now fires the three calls via
+    `Promise.all` and reassembles them into the exact state shape the
+    component already rendered from, so no other component changes
+    were needed.
+  - **This is a second measurable, citable Baseline-vs-Enhanced
+    contrast, not just a functional fix**: Baseline's admin dashboard
+    makes three separate round trips and composes them in the browser;
+    Enhanced's Gateway is expected to compose the same data server-side
+    in one call. The latency/round-trip difference between these two
+    approaches is real, measurable, and directly attributable to the
+    architectural difference (Gateway vs. none) rather than to
+    unrelated implementation variance - exactly the kind of comparison
+    this dissertation is structured to produce.
+- **Rationale:** Every choice here follows the same underlying test
+  already applied throughout this project's Stage 2 work: does doing
+  the "easy" thing (a shared frontend with branches, a dev proxy, a
+  dropped feature) hide a real architectural characteristic that the
+  dissertation needs to measure, or does it just add incidental
+  complexity with no comparison value? CORS and client-side analytics
+  composition both fail that test if avoided - a proxy or a broken
+  dashboard would both be lower-effort, but would either mask or lose a
+  genuine, citable Baseline-vs-Enhanced difference.
+- **Verification:** Ran all five backend services plus
+  `frontend-baseline`'s real Vite dev server together, driven by
+  Playwright against a real installed Chrome (same methodology as
+  every prior end-to-end verification in this project). Full real
+  flow: signup (confirmed a real `User` document created), browse the
+  homepage and a category page (Product Service data rendering
+  correctly), add to cart (Cart Service write, confirmed via the cart
+  page correctly showing merged Cart Service quantity + Product
+  Service product details and price), a full real Stripe test-mode
+  payment through the actual hosted Checkout page, redirect to
+  `/purchase-success` showing "Purchase Successful" (not stuck on
+  "Processing"), and confirmed directly in `order-service-db` that the
+  correct `Order` document was created from this real, frontend-driven
+  checkout. Confirmed the cart was correctly cleared afterward (Redis
+  key absent). Promoted the test user to admin, logged in fresh (role
+  claims are only refreshed on next login/token-refresh, consistent
+  with the stateless-auth design already on record), and loaded the
+  Admin Dashboard's Analytics tab: all three service calls resolved
+  and composed correctly into the exact same dashboard shape the
+  component always rendered - `Total Users: 5`, `Total Products: 27`,
+  `Total Sales: 2`, `Total Revenue: $89.88` (`$76.89` real migrated
+  order + `$12.99` new order, exactly matching direct database
+  totals), plus a correctly-rendered 7-day sales chart. All test data
+  (order, user, cart) deleted afterward; all five backend instances
+  and the frontend dev server stopped; `backend/` and `frontend/`
+  untouched throughout.
+  - One process-hygiene note: port 5173 was occupied by a leftover
+    Vite dev server from earlier Phase 1 verification work in this
+    project (confirmed via process command-line inspection before
+    acting, and confirmed with the researcher before terminating it,
+    since it wasn't started in this session and killing an
+    unrecognized listening process crosses a safety boundary that
+    requires explicit confirmation).
+- **Alternatives considered:** A Vite dev-server proxy instead of real
+  CORS - rejected per the Rationale above, as the methodologically
+  weaker choice for a project whose purpose is measuring architectural
+  differences, not just making requests succeed. Leaving
+  `AnalyticsTab.jsx` pointed at a single service and letting it 404 -
+  rejected once client-side aggregation was identified as both
+  faithful to `CLAUDE.md`'s "Analytics is not a service" rule and a
+  source of real comparison data, not just a workaround. A dynamic
+  routing-helper function instead of five named axios exports -
+  rejected as unnecessary indirection when every call site's target
+  service is already known statically.
+- **Stage:** Baseline Microservices (`frontend-baseline/`, per-service
+  CORS, the three summary endpoints); both the CORS contrast and the
+  client-side-aggregation contrast are written to generalize as
+  forward references to Enhanced Microservices, where the Gateway is
+  expected to eliminate the need for each.

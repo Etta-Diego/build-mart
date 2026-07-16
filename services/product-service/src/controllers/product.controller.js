@@ -117,6 +117,21 @@ export const getRecommendedProducts = async (req, res) => {
 	}
 };
 
+// New in Product Service - not present in the monolith. See
+// user-service's auth.controller.js#getUserCount for the full rationale:
+// each service exposes a small summary of its own data, and the frontend
+// composes them client-side in the absence of a Baseline-stage Analytics
+// service or Gateway. See docs/decision_log.md.
+export const getProductCount = async (req, res) => {
+	try {
+		const count = await Product.countDocuments();
+		res.json({ count });
+	} catch (error) {
+		console.log("Error in getProductCount controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
 export const getProductsByBatch = async (req, res) => {
 	try {
 		const { ids } = req.body;

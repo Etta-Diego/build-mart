@@ -163,3 +163,23 @@ export const getProfile = async (req, res) => {
 		res.status(500).json({ message: "Server error", error: error.message });
 	}
 };
+
+// New in User Service - not present in the monolith. The monolith's
+// admin analytics dashboard read this figure via a direct
+// User.countDocuments() call inside analytics.controller.js, which had no
+// service boundary to cross. In Baseline Microservices there is no
+// Analytics service (per CLAUDE.md, analytics is a composition layer, not
+// a domain service) and no Gateway yet to host that composition - so each
+// service that owns a piece of the dashboard exposes a small summary of
+// its own data (this is normal service behavior, not analytics logic
+// living here), and the frontend composes the pieces client-side. See
+// docs/decision_log.md.
+export const getUserCount = async (req, res) => {
+	try {
+		const count = await User.countDocuments();
+		res.json({ count });
+	} catch (error) {
+		console.log("Error in getUserCount controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};

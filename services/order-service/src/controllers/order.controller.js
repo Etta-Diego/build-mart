@@ -89,3 +89,82 @@ export const getUserOrders = async (req, res) => {
 		res.status(500).json({ message: "Server error", error: error.message });
 	}
 };
+
+// New in Order Service - not present in the monolith as a standalone
+// endpoint. Ports the sales/revenue portion of the monolith's
+// analytics.controller.js#getAnalyticsData (minus users/products, which
+// now live in User Service and Product Service respectively) and
+// #getDailySalesData verbatim, since Order Service already owns all the
+// data needed for both - no cross-service call required. See
+// user-service's auth.controller.js#getUserCount for the full rationale
+// on why this exists per-service instead of as a dedicated Analytics
+// service. See docs/decision_log.md.
+export const getOrderSummary = async (req, res) => {
+	try {
+		const salesData = await Order.aggregate([
+			{
+				$group: {
+					_id: null,
+					totalSales: { $sum: 1 },
+					totalRevenue: { $sum: "$totalAmount" },
+				},
+			},
+		]);
+
+		const { totalSales, totalRevenue } = salesData[0] || { totalSales: 0, totalRevenue: 0 };
+
+		const endDate = new Date();
+		const startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+		const dailySalesData = await getDailySalesData(startDate, endDate);
+
+		res.json({ totalSales, totalRevenue, dailySalesData });
+	} catch (error) {
+		console.log("Error in getOrderSummary controller", error.message);
+		res.status(500).json({ message: "Server error", error: error.message });
+	}
+};
+
+async function getDailySalesData(startDate, endDate) {
+	const dailySalesData = await Order.aggregate([
+		{
+			$match: {
+				createdAt: {
+					$gte: startDate,
+					$lte: endDate,
+				},
+			},
+		},
+		{
+			$group: {
+				_id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+				sales: { $sum: 1 },
+				revenue: { $sum: "$totalAmount" },
+			},
+		},
+		{ $sort: { _id: 1 } },
+	]);
+
+	const dateArray = getDatesInRange(startDate, endDate);
+
+	return dateArray.map((date) => {
+		const foundData = dailySalesData.find((item) => item._id === date);
+
+		return {
+			date,
+			sales: foundData?.sales || 0,
+			revenue: foundData?.revenue || 0,
+		};
+	});
+}
+
+function getDatesInRange(startDate, endDate) {
+	const dates = [];
+	let currentDate = new Date(startDate);
+
+	while (currentDate <= endDate) {
+		dates.push(currentDate.toISOString().split("T")[0]);
+		currentDate.setDate(currentDate.getDate() + 1);
+	}
+
+	return dates;
+}

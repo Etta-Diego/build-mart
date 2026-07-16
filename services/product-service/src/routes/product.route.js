@@ -4,6 +4,7 @@ import {
 	deleteProduct,
 	getAllProducts,
 	getFeaturedProducts,
+	getProductCount,
 	getProductsByBatch,
 	getProductsByCategory,
 	getRecommendedProducts,
@@ -21,6 +22,8 @@ import { adminRoute, protectRoute } from "../middleware/auth.middleware.js";
 const router = express.Router();
 
 router.get("/", protectRoute, adminRoute, getAllProducts);
+// Client-side analytics composition - see product.controller.js#getProductCount.
+router.get("/count", protectRoute, adminRoute, getProductCount);
 router.get("/featured", getFeaturedProducts);
 router.get("/category/:category", getProductsByCategory);
 router.get("/recommendations", getRecommendedProducts);
