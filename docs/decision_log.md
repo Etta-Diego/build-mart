@@ -444,3 +444,71 @@ Written for direct reuse in the dissertation's methodology chapter.
   account deleted afterward.
 - **Stage:** Monolith
 - **Stage:** Monolith
+
+### [2026-07-16] Product Service extracted; admin routes deliberately disabled pending Auth Service
+- **Decision:** Extracted the first of five Stage 2 services,
+  `services/product-service/`, from `backend/`. `product.model.js`,
+  `product.controller.js` (all six handlers, including the Redis
+  featured-products cache with its 300s TTL), and `cloudinary.js` were
+  copied with only import-path changes — no logic rewrite. `lib/db.js`
+  and `lib/metrics.js` reuse the monolith's exact patterns (same opt-in
+  `DNS_WORKAROUND`, same five metric names for cross-stage
+  comparability). The service connects to a **new, separate database**
+  (`product-service-db`) on the same Atlas cluster, not the monolith's
+  `buildmart` database — this is the first concrete instance of the
+  Stage 2 "decomposed but still MongoDB throughout" design already
+  committed to in this file.
+  - In `product.route.js`, the four routes that depend on
+    `protectRoute`/`adminRoute` (`GET /`, `POST /`, `PATCH /:id`,
+    `DELETE /:id`) are commented out individually, each with a
+    `TODO(auth-service)` comment, rather than importing
+    `backend/middleware/auth.middleware.js` across the service
+    boundary or silently leaving them unauthenticated. The three public
+    routes (`GET /featured`, `GET /category/:category`, `GET
+    /recommendations`) are live. `auth.middleware.js` is not imported
+    into this service at all.
+  - Added `lib/redis.js`, and `ioredis`/`REDIS_URL` to
+    `package.json`/`.env.example` — not originally in the requested file
+    list, but required for the unchanged `product.controller.js` to run,
+    since `getFeaturedProducts`/`toggleFeaturedProduct` both call
+    `redis`. Flagged to the researcher at the time.
+  - Wrote `scripts/migrate-products.js` (one-off, not wired into the
+    app) to copy `buildmart.products` into `product-service-db.products`
+    verbatim, preserving `_id`s (Order documents in the monolith
+    reference product `_id`s, so preserving them keeps cross-referencing
+    possible later). Idempotent by `_id`, additive only. Run once: 27
+    source documents, 27 inserted, target count verified equal to
+    source, source left untouched.
+- **Rationale:** "Extraction, not a rewrite" was the explicit instruction
+  — copying controller/model/lib logic unchanged means any correctness
+  differences between Stage 1 and Stage 2 benchmarking come from the
+  *architecture* (separate process, separate database, network
+  boundary) rather than from incidental logic changes made during the
+  port. Disabling admin routes per-line (rather than deleting them,
+  gating the whole router, or wiring a fake/local auth check) keeps the
+  eventual re-enablement a one-line diff once the User/Auth Service
+  exists, and keeps the git history honest about exactly which routes
+  are and aren't live at this stage of the decomposition.
+- **Verification:** Ran the service standalone (`node src/server.js`)
+  against `product-service-db`. `/metrics` showed
+  `app_ready_timestamp_seconds` populated after Mongo connected. `GET
+  /api/products/featured` returned 8 products, all with `isFeatured ===
+  true`. `GET /api/products/category/cement` returned 4 products, all
+  with `category === "cement"`. `GET /api/products/recommendations`
+  returned 4 randomly-sampled products with the same projected field
+  shape as the monolith (`_id`/`name`/`description`/`image`/`price`,
+  no `category`/`isFeatured` leaked). Confirmed the four disabled admin
+  routes all 404 (route not registered, not a silent 401/bypass).
+  Confirmed the `featured_products` Redis key carried its TTL behavior
+  over (283s remaining shortly after being set). Test instance stopped
+  afterward; `backend/` (the monolith) was not started, modified, or
+  otherwise touched by any of this.
+- **Alternatives considered:** A single `router.use` guard returning 501
+  for all admin paths — rejected in favor of per-route comments, which
+  make it visually obvious in a diff which specific routes are affected
+  and preserves each route's exact original middleware chain as a
+  comment rather than replacing it with a generic stub. Standing up a
+  stub/local auth check just for this service — rejected as
+  extraction scope creep; the real fix is the User/Auth Service, not a
+  throwaway substitute that would need to be torn out again.
+- **Stage:** Baseline Microservices
