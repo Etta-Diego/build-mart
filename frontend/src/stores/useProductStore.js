@@ -2,6 +2,14 @@ import { create } from "zustand";
 import toast from "react-hot-toast";
 import axios from "../lib/axios";
 
+// Tracks the in-flight search request outside the store so a newer call
+// can cancel a still-pending older one - without this, a slower earlier
+// response could resolve after a faster newer one and silently overwrite
+// products with a stale, mismatched result (the exact race condition
+// exercised by "search again without navigating away" - see
+// docs/decision_log.md).
+let searchAbortController = null;
+
 export const useProductStore = create((set) => ({
 	products: [],
 	loading: false,
@@ -85,14 +93,28 @@ export const useProductStore = create((set) => ({
 		// the caller is Navbar's debounced input or a direct visit to a bare
 		// /search URL with no query.
 		if (!query || !query.trim()) {
+			searchAbortController?.abort();
 			set({ products: [] });
 			return;
 		}
+
+		// Cancel whatever search is still in flight before starting this one,
+		// so an older, slower response can never land after and overwrite a
+		// newer, faster one.
+		searchAbortController?.abort();
+		const controller = new AbortController();
+		searchAbortController = controller;
+
 		set({ loading: true });
 		try {
-			const response = await axios.get(`/products/search?q=${encodeURIComponent(query.trim())}`);
+			const response = await axios.get(`/products/search?q=${encodeURIComponent(query.trim())}`, {
+				signal: controller.signal,
+			});
 			set({ products: response.data, loading: false });
 		} catch (error) {
+			if (error.code === "ERR_CANCELED") {
+				return; // superseded by a newer search - not a real error
+			}
 			set({ error: "Failed to search products", loading: false });
 			toast.error(error.response?.data?.error || "Failed to search products");
 		}

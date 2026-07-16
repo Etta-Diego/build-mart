@@ -1936,3 +1936,50 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Baseline Microservices (mirrors both Stage 1 Search entries
   above; the `AbortController` fix is Baseline-first, flagged for the
   monolith as noted).
+
+### [2026-07-16] AbortController race-condition fix backported into the monolith - closes the flagged asymmetry
+- **Decision:** Backported the `AbortController`-based request-cancellation
+  fix from `frontend-baseline/src/stores/useProductStore.js`'s
+  `searchProducts` action into `frontend/src/stores/useProductStore.js`'s
+  - the same module-scoped `searchAbortController` variable, the same
+  abort-before-starting-a-new-request logic, the same silent handling of
+  the resulting `ERR_CANCELED` rejection. Logic is identical between the
+  two; the only difference is which axios instance is used (`axios` from
+  `../lib/axios` in the monolith vs. `productApi` from `../lib/api` in
+  `frontend-baseline`), unchanged from before this fix. `backend/` was not
+  touched - this is a pure frontend state-management fix, no server-side
+  component.
+- **Rationale:** This closes the exact asymmetry flagged in the Search
+  Stage 2 entry above: the race condition (an older, slower search
+  response landing after a newer, faster one and silently overwriting
+  `products` with stale, mismatched results) was found and fixed in
+  Baseline first, purely as a sequencing artifact of which codebase was
+  being worked on at the time - not because the monolith needed it less.
+  Leaving it unfixed in the monolith would have meant Comparison A
+  (Monolith vs. Baseline) reflected an incidental implementation
+  discrepancy rather than an intentional one, the same category of
+  concern already on record in this file (see the "Monolith audited for
+  four performance optimizations" entry) about keeping cross-stage
+  comparisons attributable to architecture, not to which codebase
+  happened to get a fix first.
+- **Verification:** Ran the same specific test already proven in
+  `frontend-baseline`, against the real, already-running monolith
+  `backend/` and `frontend/` (Playwright, headless Chromium - noted in
+  passing that this Vite instance listens on `[::1]:5173`, IPv6 loopback
+  only, so the verification script navigated to `http://[::1]:5173/`
+  explicitly rather than `localhost`, which Chromium was resolving to an
+  unbound IPv4 address and timing out on): searched "pipe" (correctly
+  showed `PVC Plumbing Pipe...`, URL updated to `/search?q=pipe`), then,
+  without navigating away, cleared the box and searched "cement" -
+  confirmed exactly one new request fired, the URL updated to
+  `q=cement`, the results correctly showed only cement products (and the
+  same "Reinforcement Steel Rod" substring match already verified twice
+  before), and the prior query's `PVC Plumbing Pipe` result was
+  completely gone. Identical outcome to the `frontend-baseline`
+  verification in the entry above - the fix behaves the same in both
+  codebases, as expected from an unchanged port. No backend changes
+  were needed or made; the already-running monolith `backend/` process
+  (pre-existing, not started this session) was left untouched throughout.
+- **Stage:** Monolith. This entry, together with the two above, means
+  the `AbortController` fix now exists identically in both the monolith
+  and Baseline Microservices - the asymmetry is closed.
