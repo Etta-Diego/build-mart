@@ -512,3 +512,111 @@ Written for direct reuse in the dissertation's methodology chapter.
   extraction scope creep; the real fix is the User/Auth Service, not a
   throwaway substitute that would need to be torn out again.
 - **Stage:** Baseline Microservices
+
+### [2026-07-16] User/Auth Service extracted; stateless JWT verification adopted as the baseline auth design
+- **Decision:** Extracted the second of five Stage 2 services,
+  `services/user-service/`. `user.model.js` was copied without its
+  `cartItems` field (cart is moving to its own service, not staying with
+  User); `signup`/`login`/`logout`/`refreshToken` were copied unchanged in
+  logic. Two deliberate departures from a pure "copy unchanged" extraction,
+  both required to make cross-service authorization work without a
+  database or network round trip per request:
+  1. **Role signed into the JWT.** `generateTokens(userId, role)` now signs
+     `{ userId, role }` into *both* the access token and the refresh
+     token (previously `{ userId }` only, access token only). Signing role
+     into the refresh token too means `refreshToken` can re-issue a fresh
+     access token with the current role using nothing but the refresh
+     token's own payload — no database lookup at refresh time either.
+     Tradeoff, documented in a code comment on `generateTokens`: a role
+     change only takes effect on the user's next login, or when their
+     refresh token itself expires (7 days) — there is no shorter
+     propagation path in this design.
+  2. **`auth.middleware.js` rewritten to be fully stateless**, and
+     physically duplicated (not imported) into every service that needs
+     it — `services/user-service/src/middleware/` and
+     `services/product-service/src/middleware/` today, every future
+     service going forward. Each copy verifies the access token's
+     signature locally against a shared `ACCESS_TOKEN_SECRET` and trusts
+     the decoded `{ userId, role }` claims directly, setting
+     `req.user = { _id: decoded.userId, role: decoded.role }` — no
+     `User.findById` call, no HTTP call to User/Auth Service, in any
+     service including User/Auth Service's own copy. This is documented
+     in-line in the middleware file itself (not just here), per explicit
+     instruction, since it's the kind of tradeoff a future reader needs
+     to see at the point where it's easy to miss.
+  3. **Consequence of (2) for `getProfile`:** since the middleware no
+     longer does a database fetch anywhere, `getProfile` (the one route
+     that needs the full profile — name/email, not just id/role) now does
+     its own `User.findById(req.user._id).select("-password")` inline.
+     This is User/Auth Service's own database, not a cross-service call —
+     the fetch just moved from the middleware (where it happened for
+     every route) into the one handler that actually needs it. Output
+     shape is identical to the monolith's `getProfile`; only where the
+     fetch happens changed.
+  - `req.user` uses the key `_id` (not `userId`), matching every other
+    controller already written against `req.user._id`
+    (`order.controller.js`, `cart.controller.js` in the monolith), so
+    those controllers won't need a rename when they're extracted into
+    their own services later and reuse this same middleware.
+  - **Product Service retrofit, same commit:** `services/product-service/`
+    was extracted first (see the entry above) with its four admin routes
+    disabled, because no Auth service existed yet to verify tokens
+    against. Now that `user-service` exists, this commit un-does that gap
+    as an explicit follow-up, not folded in silently: duplicated the new
+    `auth.middleware.js` into `services/product-service/src/middleware/`,
+    added `cookie-parser` (neither service previously read cookies, since
+    neither had auth wired in yet), and uncommented all four admin routes
+    with `protectRoute`/`adminRoute` wired in. This sequencing —
+    Product Service shipped with a real, temporary gap, then a dedicated
+    follow-up commit closed it once its dependency existed — is itself a
+    direct, worth-recording consequence of extracting services one at a
+    time rather than all five simultaneously.
+  - `scripts/migrate-users.js`: same idempotent-by-`_id`, additive-only,
+    raw-collection-copy pattern as `migrate-products.js`, copying
+    `buildmart.users` → `user-service-db.users`, explicitly stripping
+    `cartItems` from each document before insert. Run once: 4 source
+    documents, 4 inserted, 1 of which had a non-empty `cartItems` that was
+    correctly dropped, target count verified equal to source, source left
+    untouched.
+- **Rationale:** The alternative to stateless verification — every
+  service calling back into User/Auth Service (or a shared database) on
+  every authenticated request — would make every other service's
+  availability and latency depend on User/Auth Service, which defeats a
+  major point of decomposing into independently deployable services in
+  the first place. Signing role into the token and verifying it locally
+  trades instant role-change propagation for that independence, which is
+  an explicit, acceptable tradeoff for the Baseline Microservices stage;
+  centralized, always-current authorization is deferred to the API
+  Gateway in the Enhanced Microservices stage, where it belongs
+  architecturally.
+- **Verification:** Ran both services standalone against their real
+  databases. Signed up a fresh test user against User/Auth Service
+  (`customer` role) and confirmed: `GET /api/auth/profile` returns the
+  full profile via its own DB fetch; the same token against Product
+  Service's `GET /api/products/` (admin-gated) correctly 403s; the same
+  route with no cookie at all correctly 401s. Promoted the test user to
+  `admin` directly in `user-service-db`, logged in again to mint a fresh
+  admin-role token, and confirmed all four previously-disabled Product
+  Service admin routes now work with it (`GET /`, `PATCH /:id` exercised
+  directly — toggled and restored a real product's `isFeatured` flag).
+  Then, as the strongest test of "no cross-service call": **killed
+  User/Auth Service entirely** and re-hit Product Service's admin route
+  with the same already-issued token — still `200`, proving Product
+  Service authenticates and authorizes the request with zero dependency
+  on User/Auth Service being reachable. Test user and its token deleted
+  afterward; both temporary service instances stopped; product data
+  confirmed unaffected (27/27, `isFeatured` restored to its original
+  value). `backend/` (the monolith) was not touched.
+- **Alternatives considered:** Keep `protectRoute` doing a database
+  lookup (as the monolith does), but have each service query its own
+  copy of relevant User fields via an internal replication/sync
+  mechanism — rejected as significantly more infrastructure for a
+  baseline stage that hasn't earned it yet, and it still wouldn't remove
+  the propagation-delay tradeoff, just relocate it. Have User/Auth
+  Service's own middleware copy keep doing a DB lookup (since it's local
+  to that service) while every *other* service's copy stays stateless —
+  rejected in favor of one identical, unconditionally stateless
+  middleware everywhere, so there is exactly one auth design to reason
+  about and audit, not two special-cased variants that could silently
+  drift apart.
+- **Stage:** Baseline Microservices

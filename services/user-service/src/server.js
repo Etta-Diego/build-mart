@@ -3,13 +3,13 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 
 import { metricsMiddleware, register, markReady } from "./lib/metrics.js";
-import productRoutes from "./routes/product.route.js";
+import authRoutes from "./routes/auth.route.js";
 import { connectDB } from "./lib/db.js";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 5002;
 
 app.use(metricsMiddleware);
 
@@ -21,12 +21,12 @@ app.get("/metrics", async (req, res) => {
 	res.end(await register.metrics());
 });
 
-app.use("/api/products", productRoutes);
+app.use("/api/auth", authRoutes);
 
 const startServer = async () => {
 	await connectDB();
 	app.listen(PORT, () => {
-		console.log("Product service is running on http://localhost:" + PORT);
+		console.log("User/Auth service is running on http://localhost:" + PORT);
 		markReady();
 	});
 };
