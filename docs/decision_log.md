@@ -1983,3 +1983,56 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Monolith. This entry, together with the two above, means
   the `AbortController` fix now exists identically in both the monolith
   and Baseline Microservices - the asymmetry is closed.
+
+### [2026-07-16] Deployment topology: Baseline on 5 EC2 instances, Monolith on 1 - a compute-parity confound, mitigated not eliminated
+- **Decision:** Baseline Microservices is deployed across 5 separate EC2
+  instances, one per service (Product, User/Auth, Cart, Coupon, Order),
+  while the Monolith runs on a single EC2 instance. This is a deliberate
+  choice favoring genuine infrastructure-level service isolation -
+  independent failure domains, independent scaling, independent
+  resource limits per service - over either cost minimization or strict
+  compute-parity with the Monolith.
+- **Acknowledged confound:** this means Baseline has access to greater
+  aggregate compute than the Monolith, which is a potential confound
+  when interpreting raw performance differences in Comparison A
+  (Monolith vs. Baseline) - some of any observed difference may reflect
+  available resources rather than architecture alone. This is recorded
+  explicitly rather than left implicit, per this file's own standard for
+  every other comparison-affecting decision (e.g. the four-optimizations
+  audit entry, the `AbortController` asymmetry just closed above).
+- **Mitigation (narrows, does not eliminate, the gap):** Baseline's five
+  instances are each sized smaller (`t3.micro`) relative to the
+  Monolith's single, larger instance (`t3.small`) - deliberately chosen
+  to reduce the aggregate compute gap between the two sides without
+  attempting to erase it entirely (erasing it would mean either
+  under-provisioning Baseline's per-service isolation below what a real
+  microservices deployment would use, or over-provisioning the Monolith
+  beyond what a real single-instance deployment would use - both would
+  themselves be confounds, just differently shaped ones).
+- **Rationale:** Comparison A is explicitly about deployment efficiency,
+  accessibility, and loading performance across two genuinely different
+  deployment topologies (per `CLAUDE.md`'s research design) - matching
+  compute exactly would misrepresent what a real-world Monolith-vs-
+  Baseline-Microservices migration actually looks like, since one of the
+  concrete costs/benefits of decomposing into services is precisely
+  that each service can be provisioned (and scaled) independently. The
+  `t3.micro`/`t3.small` sizing choice is the practical middle ground: it
+  doesn't pretend the two topologies have identical compute, but it
+  avoids the confound being extreme.
+- **Alternatives considered:** Identical instance count/size on both
+  sides (e.g. 5x `t3.small` for Baseline, matching the Monolith's size
+  exactly) - rejected as artificial parity that would itself misrepresent
+  a realistic Baseline deployment and wouldn't reflect how organizations
+  actually size decomposed services. Running Baseline on a single shared
+  EC2 instance (5 processes, 1 machine) - rejected as contradicting the
+  entire point of Baseline's service-isolation design; it would collapse
+  the independent-failure-domain property this stage exists to
+  demonstrate, and would confound Comparison B (Baseline vs. Enhanced)
+  instead, where Enhanced's Kubernetes orchestration is meant to be
+  compared against a genuinely multi-instance Baseline.
+- **Action item:** This limitation and its mitigation must be referenced
+  explicitly in the dissertation's discussion of Comparison A results -
+  not left as a methods-section footnote - since any raw performance
+  delta reported there needs this caveat to be interpreted correctly.
+- **Stage:** Baseline Microservices (deployment topology; affects
+  interpretation of Comparison A, Monolith vs. Baseline).
