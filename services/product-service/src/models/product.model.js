@@ -31,6 +31,15 @@ const productSchema = new mongoose.Schema(
 	{ timestamps: true }
 );
 
+// Mirrors backend/models/product.model.js (v1.4-monolith-baseline):
+// category/isFeatured back getProductsByCategory and
+// getFeaturedProducts/updateFeaturedProductsCache's filter lookups;
+// createdAt backs the stable sort pagination will rely on once added
+// (Stage 2 Part 2) - see docs/decision_log.md.
+productSchema.index({ category: 1 });
+productSchema.index({ isFeatured: 1 });
+productSchema.index({ createdAt: -1 });
+
 const Product = mongoose.model("Product", productSchema);
 
 export default Product;

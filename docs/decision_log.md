@@ -2230,3 +2230,78 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Monolith. (Baseline Microservices and Enhanced Microservices
   already covered by the prior entry above; `services/` and
   `frontend-baseline/` were not touched this session.)
+
+### [2026-07-17] Indexes mirrored into Baseline Microservices - Stage 2, Part 1 of 4 of the optimization pass
+- **Decision:** Ported the same index specs verified in the Monolith at
+  `v1.4-monolith-baseline` into the two Baseline services that own the
+  equivalent data, matching each service's own schema rather than
+  copy-pasting blindly:
+  - `services/product-service/src/models/product.model.js`:
+    `{ category: 1 }`, `{ isFeatured: 1 }`, `{ createdAt: -1 }` - same
+    three as the monolith. Confirmed against Product Service's own
+    controller before porting: `getProductsByCategory` filters on
+    `category`, `getFeaturedProducts`/`updateFeaturedProductsCache`
+    filter on `isFeatured`, exactly matching the monolith's usage this
+    was copied from.
+  - `services/order-service/src/models/order.model.js`:
+    `{ user: 1, createdAt: -1 }` compound + `{ createdAt: -1 }`
+    standalone - same two as the monolith. Confirmed against Order
+    Service's own controller first: `getUserOrders` filters on `user`
+    and sorts on `createdAt` together (served by the compound index),
+    `getAllOrders` sorts on `createdAt` with no filter (can't use the
+    compound index's prefix, needs the standalone one) - identical
+    query shapes to the monolith's `getUserOrders`/`getAllOrders`.
+    `stripeSessionId` was **not** re-added as a new index - it already
+    carries `unique: true` in both the monolith and this service, which
+    Mongoose backs with its own index automatically; verified live
+    (below) rather than assumed.
+  - **User Service and Coupon Service checked, no new index added to
+    either** - same conclusion the monolith's audit reached, confirmed
+    against these services' own queries this time rather than just
+    inherited: `auth.controller.js` queries `User` only by `email`
+    (already `unique: true`-indexed) or `_id` (default-indexed);
+    `coupon.controller.js` queries `Coupon` only by `userId` and/or
+    `code` (both already `unique: true`-indexed), the most selective
+    filters available on that schema. No frequently-queried unindexed
+    field exists on either model.
+  - **Cart Service: explicitly confirmed out of scope, not silently
+    skipped** - it has no `MONGO_URI`, no `.env` MongoDB config, and no
+    Mongoose model file at all (`services/cart-service/src` contains no
+    `models/` directory); cart data lives entirely in Redis
+    (`src/lib/redis.js`), consistent with `CLAUDE.md`'s fixed decision
+    that Cart is Redis-backed, not MongoDB, from Stage 2 onward. There
+    is nothing for a MongoDB index to apply to.
+- **Scope discipline:** this pass is indexes only. Pagination,
+  compression, and `Promise.all` are separate, later parts of this same
+  four-part optimization pass (Stage 2, Parts 2-4), each to be verified
+  independently before starting the next - not bundled in here even
+  though some of the reasoning (e.g. `createdAt` backing pagination's
+  sort stability) already anticipates Part 2. `frontend-baseline/` was
+  not touched: indexes are a backend/database-only change with no
+  frontend-visible effect.
+- **Verification:** Live, direct query against each service's own real
+  MongoDB connection (`Model.collection.indexes()`), same method already
+  proven in the monolith - adapted only in that a temporary
+  `_verify_indexes_tmp.js` script (deleted immediately after use, never
+  committed) called `await Model.init()` before reading
+  `.collection.indexes()`, since Mongoose's autoIndex build after
+  `connectDB()` runs in the background and a same-tick read raced ahead
+  of it, initially showing only the default `_id_` index; `Model.init()`
+  resolves once index building genuinely completes, and the same-tick
+  race meant this had to be added even though the monolith's original
+  verification apparently didn't need it (likely because its server had
+  already been running with the new indexes for a while by the time it
+  was checked, not a difference in correctness). No DNS SRV issue
+  recurred this session (`DNS_WORKAROUND=true` already set in both
+  services' `.env`, inherited from Stage 2's initial setup) - noted
+  since the task anticipated needing to adapt for it.
+  - Product Service (`product-service-db`): confirmed
+    `category_1`, `isFeatured_1`, `createdAt_-1` all present alongside
+    the default `_id_` index.
+  - Order Service (`order-service-db`): confirmed `user_1_createdAt_-1`
+    and `createdAt_-1` present, alongside the pre-existing
+    `stripeSessionId_1` (`unique: true`) and default `_id_` indexes.
+- **Stage:** Baseline Microservices (mirrors the Monolith's index
+  portion of the `v1.4-monolith-baseline` four-optimizations entry
+  above; pagination/compression/`Promise.all` mirroring still pending as
+  Parts 2-4).
