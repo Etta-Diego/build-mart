@@ -54,10 +54,20 @@ JWT auth (bcryptjs + jsonwebtoken), React/Vite frontend
 - Prefer showing a plan before multi-file changes
 
 ## Current phase
-Phase 1 implementation is complete and verified: Order module extracted
-(order.controller.js/order.route.js), prom-client instrumentation
-(lib/metrics.js, /metrics endpoint), startup-race and checkout-hang bugs
-fixed, Redis activated. See docs/DECISION_LOG.md for the full list of
-decisions and the one known verification gap (live Stripe checkout
-round-trip untested — placeholder key in .env). Awaiting explicit
-go-ahead to commit and tag v1.0-monolith-baseline.
+Stage 1 (Monolith) and Stage 2 (Baseline Microservices) are both
+complete and verified. Stage 1 is tagged through v1.4-monolith-baseline
+(instrumented baseline, admin Order Overview, product search, the
+AbortController race-condition fix, and all four performance
+optimizations below). Stage 2 — built on the `baseline-microservices`
+branch — has all five domain services extracted (user, product, cart,
+coupon, order), Order Overview and Search mirrored in, and the same
+four performance optimizations (indexes, pagination, compression,
+Promise.all) mirrored in and verified with matching rigor, including a
+direct monolith-vs-Baseline timing comparison for the Promise.all
+`deleteProduct` change. See docs/DECISION_LOG.md for the full decision
+history and every verification method used.
+
+Stage 3 (Enhanced Microservices) is now beginning on the new
+`enhanced-microservices` branch, created from `baseline-microservices`'
+current tip (commit 6b804ad). No Kubernetes/API Gateway/Redis
+caching/CI-CD work has started yet.
