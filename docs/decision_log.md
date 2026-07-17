@@ -2418,6 +2418,15 @@ Written for direct reuse in the dissertation's methodology chapter.
       it. The throwaway user was deleted immediately after. This
       deviates from the prior session's literal signup-then-promote
       account flow, so it's recorded here rather than left implicit.
+      **Narrower scope this implies:** because the seeded token bypassed
+      Redis entirely, this session's admin verification exercised only
+      stateless access-token verification (`protectRoute`/`adminRoute`
+      checking the JWT signature) - it did not exercise the
+      refresh-token flow (issuance, Redis storage, or the 15-minute
+      re-issuance path) at all. This is an accepted, narrow gap specific
+      to this verification session's auth method, not a limitation of
+      the pagination work itself, which doesn't touch token refresh in
+      any way.
     - `CategoryPage` (`cement`): 4 product cards rendered, no Load More
       (matches the API-level `hasMore:false` check).
     - `SearchResultsPage` (`cement`): 7 product cards rendered, no Load
@@ -2457,7 +2466,16 @@ Written for direct reuse in the dissertation's methodology chapter.
       which React logs as a "non-boolean attribute" console warning. It
       doesn't affect rendered output or pagination behavior; worth a
       trivial fix in some future pass, but out of scope for a
-      pagination-only session.
+      pagination-only session. **Confirmed symmetric, not a comparison
+      confound:** this is a pre-existing JSX className concatenation
+      typo present identically in `ProductsList.jsx` in both the
+      Monolith and Baseline Microservices - harmless (a console warning
+      only, no functional or data-correctness impact), and since both
+      systems carry it identically, it introduces no asymmetry between
+      the two sides for Comparison A. Left unfixed as out of scope for
+      this optimization pass; tracked here as a known, low-priority
+      cosmetic issue, fixable later via the standard
+      monolith-first-then-Baseline sequence if time permits.
     - One transient, non-reproducible `500` was observed once on
       `searchProducts` mid-session; an immediate direct `curl` retry
       against the same endpoint succeeded, and no subsequent Playwright
