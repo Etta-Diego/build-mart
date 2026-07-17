@@ -1,11 +1,16 @@
 import { redis } from "../lib/redis.js";
 import cloudinary from "../lib/cloudinary.js";
 import Product from "../models/product.model.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 
 export const getAllProducts = async (req, res) => {
 	try {
-		const products = await Product.find({}); // find all products
-		res.json({ products });
+		const { page, limit, skip } = parsePagination(req.query);
+		const [products, total] = await Promise.all([
+			Product.find({}).sort({ createdAt: -1 }).skip(skip).limit(limit),
+			Product.countDocuments({}),
+		]);
+		res.json(paginatedResponse(products, total, page, limit));
 	} catch (error) {
 		console.log("Error in getAllProducts controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });
@@ -151,8 +156,12 @@ export const getProductsByBatch = async (req, res) => {
 export const getProductsByCategory = async (req, res) => {
 	const { category } = req.params;
 	try {
-		const products = await Product.find({ category });
-		res.json({ products });
+		const { page, limit, skip } = parsePagination(req.query);
+		const [products, total] = await Promise.all([
+			Product.find({ category }).sort({ createdAt: -1 }).skip(skip).limit(limit),
+			Product.countDocuments({ category }),
+		]);
+		res.json(paginatedResponse(products, total, page, limit));
 	} catch (error) {
 		console.log("Error in getProductsByCategory controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });
@@ -185,18 +194,27 @@ export const searchProducts = async (req, res) => {
 		const q = (req.query.q || "").trim();
 
 		if (!q) {
-			return res.json([]);
+			return res.json(paginatedResponse([], 0, 1, parsePagination(req.query).limit));
 		}
 
 		const pattern = escapeRegExp(q);
-		const products = await Product.find({
+		const filter = {
 			$or: [
 				{ name: { $regex: pattern, $options: "i" } },
 				{ description: { $regex: pattern, $options: "i" } },
 			],
-		});
+		};
 
-		res.json(products);
+		const { page, limit, skip } = parsePagination(req.query);
+		// Note: the $or/$regex filter above is an unanchored substring match,
+		// which cannot use the createdAt index (or any standard index) for the
+		// filter step - only the sort benefits. See docs/decision_log.md.
+		const [products, total] = await Promise.all([
+			Product.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+			Product.countDocuments(filter),
+		]);
+
+		res.json(paginatedResponse(products, total, page, limit));
 	} catch (error) {
 		console.log("Error in searchProducts controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });

@@ -1,6 +1,7 @@
 import Order from "../models/order.model.js";
 import { getProductsByIds, ProductServiceUnavailableError } from "../lib/productServiceClient.js";
 import { getUsersByIds, UserServiceUnavailableError } from "../lib/userServiceClient.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 
 // Replaces the monolith's Order.find(...).populate("products.product", ...)
 // - Mongoose's .populate() requires the referenced model to be registered
@@ -105,9 +106,15 @@ export const getOrderById = async (req, res) => {
 
 export const getUserOrders = async (req, res) => {
 	try {
-		const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
+		const { page, limit, skip } = parsePagination(req.query);
+		const filter = { user: req.user._id };
+		const [orders, total] = await Promise.all([
+			Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+			Order.countDocuments(filter),
+		]);
 
-		res.json(await Promise.all(orders.map(populateOrderProducts)));
+		const withProducts = await Promise.all(orders.map(populateOrderProducts));
+		res.json(paginatedResponse(withProducts, total, page, limit));
 	} catch (error) {
 		console.log("Error in getUserOrders controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });
@@ -122,9 +129,23 @@ export const getUserOrders = async (req, res) => {
 // still degrades gracefully to "Unknown User" for just that row via
 // populateOrderUsers. See docs/decision_log.md for why this differs from
 // updateOrderStatus's always-best-effort approach below.
+//
+// Pagination happens BEFORE enrichment, not after: `total` below is a
+// countDocuments({}) over the WHOLE collection (the true total order
+// count), but populateOrderProducts/populateOrderUsers only ever run on
+// `orders`, the already skip/limit'd page. This bounds
+// populateOrderUsers' batch call to User Service by page size (at most
+// `limit` distinct user ids), not by the total number of orders in the
+// system - see docs/decision_log.md for why this ordering is a deliberate
+// scalability property, not just implementation order.
 export const getAllOrders = async (req, res) => {
 	try {
-		const orders = await Order.find({}).sort({ createdAt: -1 });
+		const { page, limit, skip } = parsePagination(req.query);
+		const [orders, total] = await Promise.all([
+			Order.find({}).sort({ createdAt: -1 }).skip(skip).limit(limit),
+			Order.countDocuments({}),
+		]);
+
 		const withProducts = await Promise.all(orders.map(populateOrderProducts));
 
 		let withUsers;
@@ -138,7 +159,7 @@ export const getAllOrders = async (req, res) => {
 			throw error;
 		}
 
-		res.json(withUsers);
+		res.json(paginatedResponse(withUsers, total, page, limit));
 	} catch (error) {
 		console.log("Error in getAllOrders controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });

@@ -2312,3 +2312,162 @@ Written for direct reuse in the dissertation's methodology chapter.
   portion of the `v1.4-monolith-baseline` four-optimizations entry
   above; pagination/compression/`Promise.all` mirroring still pending as
   Parts 2-4).
+
+### [2026-07-17] Pagination mirrored into Baseline Microservices - Stage 2, Part 2 of 4 of the optimization pass
+- **Decision:** Ported the monolith's `v1.4-monolith-baseline` pagination
+  contract (`{ data, total, page, limit, hasMore }`, `?page=&limit=`
+  query params, 12-item default / 20-item admin-orders page size, "Load
+  More" UX) into Product Service, Order Service, and
+  `frontend-baseline/`, unchanged in shape from the monolith's version.
+  - **`pagination.js` duplicated**, not shared: a byte-identical copy in
+    `services/product-service/src/lib/pagination.js` and
+    `services/order-service/src/lib/pagination.js`. Consistent with this
+    project's established service-independence rule (`auth.middleware.js`
+    is duplicated into every service for the same reason - see
+    `CLAUDE.md`); no other service needed a copy (User/Coupon/Cart don't
+    paginate anything).
+  - **Product Service:** `getAllProducts`, `getProductsByCategory`,
+    `searchProducts` paginated identically to the monolith -
+    `Promise.all([find().sort({createdAt:-1}).skip().limit(),
+    countDocuments()])` → `paginatedResponse()`. Empty-`q` search still
+    returns `paginatedResponse([], 0, 1, limit)`.
+  - **Order Service - paginate-then-enrich composition (the real design
+    decision this part required):** the monolith composes pagination
+    with product/user detail via a single `.populate()`'d Mongo query,
+    which isn't available here since Product and User live in separate
+    databases/services. `getUserOrders` and `getAllOrders` now run the
+    `skip`/`limit`/`countDocuments` query FIRST, then run
+    `populateOrderProducts`/`populateOrderUsers` (the existing
+    cross-service enrichment functions) only on the resulting page-sized
+    array - never on the full unpaginated collection. This is a
+    deliberate scalability property, not just implementation ordering:
+    it bounds `populateOrderUsers`'s batched call to User Service to at
+    most `limit` distinct user ids per request, regardless of how large
+    the total order collection grows, whereas paginating after
+    enrichment would have made that batch call scale with the entire
+    order history on every single page request. `total` in the response
+    is still a `countDocuments({})` over the whole collection (the true
+    total), completely independent of how many ids the enrichment step
+    touches - see verification below for how these two numbers were
+    checked separately.
+  - **Frontend (`frontend-baseline/`):** `useProductStore.js` gained the
+    same `pagination: { total, page, limit, hasMore }` field and
+    `{ page }`-aware `fetchAllProducts`/`fetchProductsByCategory`/
+    `searchProducts` as the monolith, calling `productApi` (not the
+    monolith's single `axios` instance) - page 1 replaces `products`,
+    page > 1 appends, matching the monolith's replace-vs-append branch
+    exactly. `ProductsList.jsx`, `CategoryPage.jsx`,
+    `SearchResultsPage.jsx` each gained the identical Load More button
+    gated on `pagination.hasMore`. `OrdersTab.jsx` got the
+    `ORDERS_PAGE_SIZE = 20` local-state Load More pattern, calling
+    `orderApi` - with one deliberate deviation from a literal port:
+    Baseline's `OrdersTab.jsx` already had an `error`-state UI branch
+    the monolith's version doesn't have (a pre-existing Baseline
+    improvement, unrelated to this pass); that was preserved rather than
+    removed to match the monolith more literally, with the pagination
+    state/Load More logic layered on top of it unchanged.
+- **Verification:**
+  - **Boundary correctness**, via direct API calls against each
+    service's real database (same page1/page2/last-page method proven
+    for the monolith): `getProductsByCategory` (`cement`, `limit=2`) -
+    page 1 returned 2 items with `hasMore:true`, page 2 returned the
+    remaining 2 with `hasMore:false`, no duplicate/missing ids across
+    the two pages. `searchProducts` (`q=cement`, `limit=2`, `total=7`) -
+    page 4 correctly returned exactly the 1 remaining item with
+    `hasMore:false`; empty `q` confirmed to return the
+    `{data:[],total:0,page:1,hasMore:false}` shape. `getAllProducts`
+    (admin) confirmed `total:27` matching the real dataset.
+  - **`getAllOrders`: total-vs-enrichment-scope, verified as two
+    independently-checked numbers, not inferred from one another** - the
+    real dataset only had 1 pre-existing order, too few to exercise
+    multi-page behavior meaningfully, so 5 temporary orders (distinct
+    random user ids, deleted immediately after) were seeded directly
+    into `order-service-db` to reach 6. Paginating at `limit=2` across 3
+    pages: `total` correctly read `6` on every page (the true full
+    collection count) while the 6 returned order ids across the 3 pages
+    were all distinct (no duplicates/gaps, matching `2+2+2=6`) and
+    `hasMore` correctly flipped `true,true,false`. Separately, a
+    temporary log line in `populateOrderUsers` (removed immediately
+    after, never committed) printed the exact batch of user ids it
+    resolved per call: `2, 2, 2` - never `6` - confirming enrichment was
+    genuinely bounded to each page's own user ids and not silently
+    running over the whole collection despite `total` correctly
+    reporting the whole collection's size. Both temporary seed orders
+    and the temporary log line were removed before verification
+    concluded; `getAllOrders` re-confirmed back at `total:1` afterward.
+  - **Full Playwright (headless Chromium) browser verification**, all
+    five changed `frontend-baseline` pages, run against the already-
+    running real services (no mocking):
+    - **Auth adaptation, recorded explicitly:** signup/login requires
+      Redis (refresh-token storage) and no local Redis instance was
+      running this session (unlike whatever prior session had one
+      available) - Docker was present but its daemon wasn't running,
+      so standing up a container was judged more disruptive than
+      necessary for this check. Since this project's JWT auth is
+      explicitly stateless (`CLAUDE.md`'s "Option A": each service
+      verifies the access token's signature locally, no Redis/DB lookup
+      on the request path itself), a real login flow isn't actually
+      required to exercise the pagination code under test - only a
+      validly-signed cookie is. A throwaway admin user was created
+      directly in `user-service-db` (bypassing signup/Redis entirely,
+      not going through the login endpoint), a matching access token was
+      signed with the service's own `ACCESS_TOKEN_SECRET`, and Playwright
+      set it as a browser cookie before navigating - functionally
+      equivalent to a real login from every downstream service's point
+      of view, since none of them do anything Redis-dependent to verify
+      it. The throwaway user was deleted immediately after. This
+      deviates from the prior session's literal signup-then-promote
+      account flow, so it's recorded here rather than left implicit.
+    - `CategoryPage` (`cement`): 4 product cards rendered, no Load More
+      (matches the API-level `hasMore:false` check).
+    - `SearchResultsPage` (`cement`): 7 product cards rendered, no Load
+      More.
+    - **Race-condition check** (same scenario proven valuable for the
+      `AbortController` fix): searched "pipe", then without navigating
+      away searched "cement" - confirmed the heading and all 7 rendered
+      cards correctly reflected only "cement", with no stale "pipe"
+      result bleeding through, confirming the search-cancellation logic
+      still works correctly with pagination state now layered on top of
+      it.
+    - `ProductsList` (admin, 27 real products): 12 rows after initial
+      load, Load More button present. **Rapid-pagination race check:**
+      fired two near-simultaneous clicks at the Load More button
+      (`click()` plus a forced `click({force:true})` bypassing
+      Playwright's normal actionability wait, deliberately stress-testing
+      past what a real user's click could achieve, since the button's
+      own `disabled={loading}` attribute already blocks a real double
+      click). Across repeated runs, the row count after the double-click
+      varied (24 in one run, 27 - all remaining products - in another)
+      depending on exact timing of when the second click landed relative
+      to the first request resolving, but the count of unique rows
+      always equaled the total row count in every run - no duplicate or
+      missing rows were ever produced, confirming the `disabled`-while-
+      loading guard reliably prevents the same page from ever being
+      fetched and appended twice, which is the actual race this check
+      exists to catch.
+    - `OrdersTab` (admin, 1 real order): 1 row rendered correctly (user
+      name/email, all 4 products, total, status dropdown, date), no Load
+      More button (correct - single order is under the 20-item page
+      size).
+    - One unrelated pre-existing issue observed, not introduced by this
+      pass and left unfixed as out of scope: `ProductsList.jsx`'s price
+      cell has a pre-existing JSX typo (missing space before
+      `font-semibold`, present identically in the monolith's own
+      `ProductsList.jsx` before and after its own pagination pass),
+      which React logs as a "non-boolean attribute" console warning. It
+      doesn't affect rendered output or pagination behavior; worth a
+      trivial fix in some future pass, but out of scope for a
+      pagination-only session.
+    - One transient, non-reproducible `500` was observed once on
+      `searchProducts` mid-session; an immediate direct `curl` retry
+      against the same endpoint succeeded, and no subsequent Playwright
+      run reproduced it - treated as an environment blip (most likely
+      brief MongoDB Atlas connection pressure from the session's many
+      short-lived verification scripts), not a defect, and not treated
+      as silently resolved.
+- **Scope discipline:** compression and `Promise.all` remain out of
+  scope for this session - separate Parts 3 and 4, each to be verified
+  independently, per the plan agreed before this part began.
+- **Stage:** Baseline Microservices (mirrors the Monolith's pagination
+  portion of the `v1.4-monolith-baseline` four-optimizations entry;
+  compression/`Promise.all` mirroring still pending as Parts 3-4).

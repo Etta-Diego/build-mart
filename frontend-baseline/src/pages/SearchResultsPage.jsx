@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import ProductCard from "../components/ProductCard";
 
 const SearchResultsPage = () => {
-	const { searchProducts, products } = useProductStore();
+	const { searchProducts, products, pagination, loading } = useProductStore();
 
 	const [searchParams] = useSearchParams();
 	const q = searchParams.get("q") || "";
@@ -13,6 +13,10 @@ const SearchResultsPage = () => {
 	useEffect(() => {
 		searchProducts(q);
 	}, [searchProducts, q]);
+
+	const handleLoadMore = () => {
+		searchProducts(q, { page: pagination.page + 1 });
+	};
 
 	return (
 		<div className='min-h-screen'>
@@ -46,6 +50,18 @@ const SearchResultsPage = () => {
 
 					{q && products?.map((product) => <ProductCard key={product._id} product={product} />)}
 				</motion.div>
+
+				{q && pagination.hasMore && (
+					<div className='flex justify-center mt-10'>
+						<button
+							onClick={handleLoadMore}
+							disabled={loading}
+							className='bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-6 py-2 rounded-md font-medium transition duration-300 ease-in-out'
+						>
+							{loading ? "Loading..." : "Load More"}
+						</button>
+					</div>
+				)}
 			</div>
 		</div>
 	);

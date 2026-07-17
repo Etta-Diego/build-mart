@@ -3,11 +3,15 @@ import { Trash, Star } from "lucide-react";
 import { useProductStore } from "../stores/useProductStore";
 
 const ProductsList = () => {
-	const { deleteProduct, toggleFeaturedProduct, products } = useProductStore();
+	const { deleteProduct, toggleFeaturedProduct, fetchAllProducts, products, pagination, loading } =
+		useProductStore();
 
-	console.log("products", products);
+	const handleLoadMore = () => {
+		fetchAllProducts({ page: pagination.page + 1 });
+	};
 
 	return (
+		<>
 		<motion.div
 			className='bg-[#111827] shadow-lg rounded-lg overflow-hidden max-w-4xl mx-auto border border-gray-700'
 			initial={{ opacity: 0, y: 20 }}
@@ -97,6 +101,18 @@ const ProductsList = () => {
 				</tbody>
 			</table>
 		</motion.div>
+		{pagination.hasMore && (
+			<div className='flex justify-center mt-6'>
+				<button
+					onClick={handleLoadMore}
+					disabled={loading}
+					className='bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-6 py-2 rounded-md font-medium transition duration-300 ease-in-out'
+				>
+					{loading ? "Loading..." : "Load More"}
+				</button>
+			</div>
+		)}
+		</>
 	);
 };
 export default ProductsList;

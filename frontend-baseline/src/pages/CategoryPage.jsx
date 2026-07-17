@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import ProductCard from "../components/ProductCard";
 
 const CategoryPage = () => {
-	const { fetchProductsByCategory, products } = useProductStore();
+	const { fetchProductsByCategory, products, pagination, loading } = useProductStore();
 
 	const { category } = useParams();
 
@@ -13,7 +13,10 @@ const CategoryPage = () => {
 		fetchProductsByCategory(category);
 	}, [fetchProductsByCategory, category]);
 
-	console.log("products:", products);
+	const handleLoadMore = () => {
+		fetchProductsByCategory(category, { page: pagination.page + 1 });
+	};
+
 	return (
 		<div className='min-h-screen'>
 			<div className='relative z-10 max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-16'>
@@ -42,6 +45,18 @@ const CategoryPage = () => {
 						<ProductCard key={product._id} product={product} />
 					))}
 				</motion.div>
+
+				{pagination.hasMore && (
+					<div className='flex justify-center mt-10'>
+						<button
+							onClick={handleLoadMore}
+							disabled={loading}
+							className='bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-6 py-2 rounded-md font-medium transition duration-300 ease-in-out'
+						>
+							{loading ? "Loading..." : "Load More"}
+						</button>
+					</div>
+				)}
 			</div>
 		</div>
 	);
