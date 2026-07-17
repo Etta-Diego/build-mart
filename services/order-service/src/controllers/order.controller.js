@@ -146,11 +146,19 @@ export const getAllOrders = async (req, res) => {
 			Order.countDocuments({}),
 		]);
 
-		const withProducts = await Promise.all(orders.map(populateOrderProducts));
-
-		let withUsers;
+		// Product enrichment and user enrichment are independent - neither
+		// reads a field the other adds (products enrichment only touches
+		// `.products`, user enrichment only touches `.user`) - so running them
+		// one after the other, as an earlier pass did, was purely an artifact
+		// of decomposing the monolith's single .populate() call into two
+		// separate cross-service helpers, not a real dependency. Run both
+		// concurrently and merge by _id afterward.
+		let withProducts, withUsers;
 		try {
-			withUsers = await populateOrderUsers(withProducts);
+			[withProducts, withUsers] = await Promise.all([
+				Promise.all(orders.map(populateOrderProducts)),
+				populateOrderUsers(orders.map((order) => order.toObject())),
+			]);
 		} catch (error) {
 			if (error instanceof UserServiceUnavailableError) {
 				console.log("User Service unavailable while populating order users (failing loud):", error.message);
@@ -159,7 +167,10 @@ export const getAllOrders = async (req, res) => {
 			throw error;
 		}
 
-		res.json(paginatedResponse(withUsers, total, page, limit));
+		const userByOrderId = new Map(withUsers.map((order) => [order._id.toString(), order.user]));
+		const merged = withProducts.map((order) => ({ ...order, user: userByOrderId.get(order._id.toString()) }));
+
+		res.json(paginatedResponse(merged, total, page, limit));
 	} catch (error) {
 		console.log("Error in getAllOrders controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });
@@ -196,11 +207,30 @@ export const updateOrderStatus = async (req, res) => {
 		order.status = status;
 		await order.save();
 
-		const withProducts = await populateOrderProducts(order);
+		// Same independence as getAllOrders above: product enrichment and user
+		// enrichment don't read each other's output, so both are started here
+		// (not awaited yet) to run concurrently. withProducts is still awaited
+		// on its own, rather than folded into a single Promise.all, so its
+		// resolved value stays available in the catch block below even if
+		// usersPromise rejects - needed to preserve the existing best-effort
+		// fallback, which returns the product-enriched order either way.
+		const productsPromise = populateOrderProducts(order);
+		const usersPromise = populateOrderUsers([order.toObject()]);
+		// A promise that rejects before anything has awaited/caught it is
+		// flagged by Node as an unhandled rejection, which crashes the
+		// process - this can genuinely happen here, since productsPromise is
+		// awaited first below and usersPromise's User-Service-down rejection
+		// can land before that await completes. This no-op catch marks
+		// usersPromise as handled immediately without consuming it - the real
+		// try/await below still observes the same rejection normally.
+		usersPromise.catch(() => {});
+
+		const withProducts = await productsPromise;
 
 		let populatedOrder;
 		try {
-			[populatedOrder] = await populateOrderUsers([withProducts]);
+			const [withUser] = await usersPromise;
+			populatedOrder = { ...withProducts, user: withUser.user };
 		} catch (error) {
 			if (error instanceof UserServiceUnavailableError) {
 				console.log(
@@ -231,21 +261,27 @@ export const updateOrderStatus = async (req, res) => {
 // service. See docs/decision_log.md.
 export const getOrderSummary = async (req, res) => {
 	try {
-		const salesData = await Order.aggregate([
-			{
-				$group: {
-					_id: null,
-					totalSales: { $sum: 1 },
-					totalRevenue: { $sum: "$totalAmount" },
+		const endDate = new Date();
+		const startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+		// Two independent aggregate queries against the same Order collection -
+		// the all-time totals pipeline doesn't read anything the 7-day daily
+		// breakdown pipeline computes, or vice versa - so there's no reason to
+		// run one after the other.
+		const [salesData, dailySalesData] = await Promise.all([
+			Order.aggregate([
+				{
+					$group: {
+						_id: null,
+						totalSales: { $sum: 1 },
+						totalRevenue: { $sum: "$totalAmount" },
+					},
 				},
-			},
+			]),
+			getDailySalesData(startDate, endDate),
 		]);
 
 		const { totalSales, totalRevenue } = salesData[0] || { totalSales: 0, totalRevenue: 0 };
-
-		const endDate = new Date();
-		const startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-		const dailySalesData = await getDailySalesData(startDate, endDate);
 
 		res.json({ totalSales, totalRevenue, dailySalesData });
 	} catch (error) {

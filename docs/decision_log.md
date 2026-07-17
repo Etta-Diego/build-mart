@@ -2579,3 +2579,163 @@ Written for direct reuse in the dissertation's methodology chapter.
   portion of the `v1.4-monolith-baseline` four-optimizations entry;
   `Promise.all` mirroring still pending as Part 4, the last of the
   four).
+
+### [2026-07-17] Promise.all mirrored into Baseline Microservices - Stage 2, Part 4 of 4, completing the optimization pass on both stages
+- **Decision:** Ported `deleteProduct`'s Cloudinary+MongoDB parallel
+  deletion into Product Service, confirmed the client-side Analytics
+  composition already used `Promise.all` (no change needed), and - per
+  the explicit instruction to audit Product Service and Order Service
+  more broadly rather than assume only the two known candidates
+  remained - found and parallelized two further genuinely-independent
+  sequential operations in Order Service that had emerged from work
+  since the original audit (pagination's enrichment functions, Stage 2
+  Part 2):
+  - **Product Service `deleteProduct`:** identical pattern to the
+    monolith - `destroyImage()` (Cloudinary, swallows its own errors)
+    and `Product.findByIdAndDelete()` wrapped in `Promise.all`, ported
+    verbatim from `v1.4-monolith-baseline`.
+  - **Analytics (`frontend-baseline/src/components/AnalyticsTab.jsx`):**
+    already used `Promise.all([userApi.get(...), productApi.get(...),
+    orderApi.get(...)])` for its three-service composition - this was
+    built correctly from the start, not overlooked. No code change.
+  - **`getOrderSummary` (Order Service, new in Baseline, no monolith
+    equivalent as a standalone endpoint):** the all-time totals
+    aggregate and the 7-day daily-breakdown aggregate are two
+    independent queries against the same `Order` collection - neither
+    reads the other's result - so they're now run via `Promise.all`
+    instead of one after the other.
+  - **`getAllOrders` and `updateOrderStatus` (Order Service) - the
+    broader-audit finding:** both call `populateOrderProducts`
+    (products, per-order/batched, best-effort) and `populateOrderUsers`
+    (users, batched) to enrich orders. In the monolith this is one
+    `.populate()` call; decomposing it into two separate cross-service
+    helpers when Baseline extracted Product/User into their own
+    services (and later, Stage 2 Part 2's pagination work) left them
+    sequential - products enrichment fully completing before user
+    enrichment started - purely as an artifact of how the code evolved,
+    not a real dependency: neither function reads a field the other
+    writes. Both now start concurrently:
+    - `getAllOrders`: `Promise.all([Promise.all(orders.map(populateOrderProducts)),
+      populateOrderUsers(orders.map(o => o.toObject()))])`, then merged
+      back together by `_id` afterward (each order needs both its
+      enriched `.products` from one branch and its resolved `.user`
+      from the other).
+    - `updateOrderStatus`: same independence, but written without a
+      literal `Promise.all` - the existing best-effort fallback on a
+      total User Service outage needs `withProducts` (the product-
+      enriched order) still available inside the `catch` block, which a
+      destructured `Promise.all` rejection wouldn't provide. Both
+      promises are started immediately, `withProducts` is awaited
+      separately, and `usersPromise`'s resolution/rejection is handled
+      in its own `try` - functionally concurrent, without losing the
+      partial result on failure.
+- **A real bug found and fixed during verification, not by design
+  review alone:** the first version of `updateOrderStatus`'s "start
+  both, await separately" pattern created `usersPromise` and left it
+  unawaited while `productsPromise` was awaited first - and Node
+  flags a promise that rejects before anything has awaited or attached
+  a rejection handler to it as an **unhandled rejection, which
+  terminates the process by default**. This is exactly what happened
+  when the User-Service-down fallback path was tested: Order Service
+  crashed instead of returning the expected best-effort response.
+  Fixed by attaching a no-op `usersPromise.catch(() => {})`
+  immediately after creating it, which marks the rejection as
+  "handled" for Node's detector without consuming or altering what the
+  real `try`/`await` below observes when it runs. `getAllOrders` was
+  checked for the same risk and confirmed safe: both promises there are
+  constructed directly inside the `Promise.all([...])` array literal,
+  so `Promise.all` attaches its own handlers to both synchronously, in
+  the same tick, before either can reject unobserved. This is recorded
+  here explicitly because it's the kind of subtle correctness gap that
+  a design walkthrough alone would not have caught - it only surfaced
+  by actually killing User Service and exercising the fallback path for
+  real, the same rigor already applied to every other part of this
+  pass.
+- **Verification:**
+  - **`deleteProduct` - output-equivalence and real timing, run against
+    both systems in the same session for a direct comparison** (the
+    monolith's own Stage 1 Part 4 entry recorded only qualitative
+    confirmation - "confirmed to complete... matching the original
+    sequential version's effects" - not a quantified number, so both
+    were freshly measured here rather than one side missing a real
+    figure to compare against): a real product with a genuine Cloudinary
+    image was created then deleted in each system, with temporary
+    `Date.now()` instrumentation (reverted immediately after, confirmed
+    via `git diff` showing an empty diff on `backend/controllers/
+    product.controller.js` afterward - the monolith was not left
+    modified) timing the Cloudinary destroy call, the MongoDB delete,
+    and the actual `Promise.all` wall-clock separately:
+    - **Monolith:** MongoDB delete 418ms, Cloudinary destroy 2999ms,
+      actual parallel wall-clock **3000ms** (≈ `max(418, 2999)`,
+      confirming genuine parallelism) vs. a **3417ms**
+      sequential-equivalent (`418 + 2999`) - **417ms saved (12.2%)**.
+    - **Baseline (Product Service):** MongoDB delete 300ms, Cloudinary
+      destroy 2402ms, actual parallel wall-clock **2403ms** (≈
+      `max(300, 2402)`) vs. a **2702ms** sequential-equivalent - **299ms
+      saved (11.1%)**.
+    - In both systems, Cloudinary's network round trip to an external
+      service dominates and is the long pole either way - `Promise.all`
+      shifted the total from "sum of both" to "max of both," saving
+      almost exactly the shorter operation's own duration, in both
+      systems. The two systems' absolute Cloudinary/Mongo latencies
+      differ (same external Cloudinary account, different Atlas
+      shard/database per system, ordinary request-to-request variance),
+      but the *shape* of the improvement - parallel wall-clock tracking
+      the max, not the sum - is identical between them, which is the
+      actual claim this optimization makes.
+  - **`getOrderSummary`:** confirmed internally consistent -
+    `totalSales: 1`, `totalRevenue: 76.89`, and `dailySalesData` showing
+    the sale on exactly `2026-07-15` with matching revenue and zero
+    elsewhere - matching the known real dataset, same numbers already
+    confirmed in this file's Stage 1 four-optimizations entry.
+  - **`getAllOrders` merge correctness** - the one part of this session
+    genuinely at risk of a real bug, since the new `_id`-keyed merge is
+    new code, not just added concurrency: the real dataset only has 1
+    order, too few to catch a user/product misalignment (a merge bug
+    could coincidentally look correct with only one row). Three
+    temporary orders (deleted immediately after) were seeded with three
+    distinct real users, each paired with a distinct, identifiable
+    product, specifically so a swapped pairing would be immediately
+    obvious. Across 3 repeated calls, every order's returned `.user`
+    and `.products` correctly matched their own seeded pairing every
+    time - no swaps, no misalignment. One of the four orders'
+    product came back as an unresolved raw id on the very first call
+    (not a pairing error - just that one field unresolved) and fully
+    resolved on all 3 immediate re-checks after - treated as the same
+    category of transient environment blip already documented in this
+    file's Stage 2 Part 2 entry (a brief Product Service/Atlas hiccup
+    under concurrent load), not a defect in the merge logic itself,
+    which was never wrong about *which* order a value belonged to.
+  - **`updateOrderStatus`:** happy path confirmed on the real order
+    (status changed `pending` → `processing`, full product and user
+    enrichment present, then reverted back to `pending` to leave the
+    real order unchanged) both before and after the unhandled-rejection
+    fix. Fallback path re-confirmed after the fix by stopping User
+    Service entirely and re-running the same status update: **200
+    response** (not a crash), status write correctly persisted,
+    products fully enriched, user gracefully degraded to `"Unknown
+    User"` - matching the documented best-effort contract exactly, no
+    process crash. `getAllOrders`'s fail-loud contract was checked in
+    the same User-Service-down window and confirmed unaffected: still a
+    clean `500` with the expected message, no crash. User Service was
+    restarted and the real order's status reconfirmed reverted to
+    `pending` with the user correctly re-resolved to `"Etta Onyii"`
+    afterward.
+  - All temporary state (test products with real Cloudinary uploads,
+    seeded merge-test orders) was created under throwaway/temporary
+    records and removed immediately after measurement; the real
+    dataset (27 products, 1 order) was reconfirmed unchanged at the end
+    of this part.
+- **Stage:** Baseline Microservices, completing the `Promise.all`
+  portion of the four-optimizations pass.
+- **Milestone: this completes all four optimizations (indexes,
+  pagination, compression, `Promise.all`) across both the Monolith
+  (`v1.4-monolith-baseline`) and Baseline Microservices.** Both stages
+  now carry the same four performance optimizations, applied and
+  verified with the same rigor and (where the two are directly
+  comparable, as with `deleteProduct`'s timing) the same measurement
+  method - keeping implementation quality out of what Comparison A
+  (Monolith vs. Baseline) and Comparison B (Baseline vs. Enhanced) are
+  meant to measure, per this file's running principle since the first
+  four-optimizations entry. Enhanced Microservices (Stage 3) has not
+  been started.

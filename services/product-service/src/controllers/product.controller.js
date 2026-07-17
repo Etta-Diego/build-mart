@@ -79,7 +79,8 @@ export const deleteProduct = async (req, res) => {
 			return res.status(404).json({ message: "Product not found" });
 		}
 
-		if (product.image) {
+		const destroyImage = async () => {
+			if (!product.image) return;
 			const publicId = product.image.split("/").pop().split(".")[0];
 			try {
 				await cloudinary.uploader.destroy(`products/${publicId}`);
@@ -87,9 +88,12 @@ export const deleteProduct = async (req, res) => {
 			} catch (error) {
 				console.log("error deleting image from cloduinary", error);
 			}
-		}
+		};
 
-		await Product.findByIdAndDelete(req.params.id);
+		// Independent once the product/its image URL is already known: neither
+		// operation depends on the other's outcome, and destroyImage() already
+		// swallows its own errors, so it can never cause this Promise.all to reject.
+		await Promise.all([destroyImage(), Product.findByIdAndDelete(req.params.id)]);
 
 		res.json({ message: "Product deleted successfully" });
 	} catch (error) {
