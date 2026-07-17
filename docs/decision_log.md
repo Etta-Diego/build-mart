@@ -2036,3 +2036,197 @@ Written for direct reuse in the dissertation's methodology chapter.
   delta reported there needs this caveat to be interpreted correctly.
 - **Stage:** Baseline Microservices (deployment topology; affects
   interpretation of Comparison A, Monolith vs. Baseline).
+
+### [2026-07-17] Four performance optimizations applied to the Monolith too - revises the prior Baseline/Enhanced-only scope
+- **Decision:** Implemented indexes, pagination, HTTP compression, and
+  `Promise.all` parallelization in `backend/` and `frontend/` (the
+  Monolith) - the same four optimizations the "Monolith audited for four
+  performance optimizations" entry above concluded should apply to
+  "Baseline Microservices and Enhanced Microservices (backend four)"
+  only. This explicitly revises that entry's stated scope: the
+  optimizations now apply to **all three stages**, not two.
+  - **Indexes added** (`backend/models/`):
+    - `product.model.js`: `{ category: 1 }` (getProductsByCategory
+      lookups), `{ isFeatured: 1 }` (getFeaturedProducts/cache-rebuild
+      lookups), `{ createdAt: -1 }` (pagination sort-stability - without
+      a deterministic sort, skip/limit pagination can return
+      duplicate/missing items across page boundaries).
+    - `order.model.js`: `{ user: 1, createdAt: -1 }` compound (covers
+      getUserOrders' filter+sort together), `{ createdAt: -1 }`
+      standalone (covers getAllOrders' unfiltered sort, which the
+      compound index's prefix rules can't serve).
+    - No new index on `user.model.js` (email already unique-indexed) or
+      `coupon.model.js` (code/userId already unique-indexed and already
+      the most selective possible filters).
+    - **Known limitation, deliberately not solved here:** `searchProducts`
+      still filters via an unanchored `$regex` on `name`/`description`
+      (`$or`), which cannot use any standard B-tree index for the filter
+      step - only regex patterns anchored with `^` can. The `createdAt`
+      index benefits search's *sort* step only, not its filter step. A
+      MongoDB text index would change the query syntax and introduce
+      relevance scoring - a materially different feature, not a drop-in
+      index addition - so it was scoped out rather than silently
+      papered over.
+  - **Pagination added**, one consistent shape across every list
+    endpoint: `{ data, total, page, limit, hasMore }`
+    (`hasMore = page * limit < total`), via a new shared
+    `backend/lib/pagination.js` helper (`parsePagination`,
+    `paginatedResponse`) rather than five slightly different
+    reimplementations of the same skip/limit math. Query params:
+    `?page=&limit=`.
+    - Endpoints changed: `GET /api/products` (getAllProducts),
+      `GET /api/products/category/:category`, `GET /api/products/search`,
+      `GET /api/orders` (getUserOrders), `GET /api/orders/all`
+      (getAllOrders, admin).
+    - `GET /api/orders` (getUserOrders) has **no frontend consumer
+      anywhere in `frontend/src`** (confirmed via grep before making the
+      change) - paginated on the backend anyway for consistency with the
+      other four, with no corresponding frontend file to update.
+    - Not paginated: `/products/featured` (Redis-cached, admin-curated,
+      already windowed client-side by the home carousel) and
+      `/products/recommendations` (hard-capped at 4 via `$sample`) -
+      neither is an unbounded, growing list.
+    - Frontend: `useProductStore.js` gained a `pagination: { total,
+      page, limit, hasMore }` field alongside the existing shared
+      `products` array; `fetchAllProducts`, `fetchProductsByCategory`,
+      and `searchProducts` each take an optional `{ page }` - page 1
+      replaces `products` wholesale, page > 1 appends. `ProductsList.jsx`,
+      `CategoryPage.jsx`, and `SearchResultsPage.jsx` each gained a "Load
+      More" button gated on `pagination.hasMore`. `OrdersTab.jsx` doesn't
+      use the Zustand product store (it has its own local `useState`),
+      so it got its own local `page`/`total`/`hasMore` state and Load
+      More button instead.
+    - **UX choice: "Load More" button**, not page numbers or infinite
+      scroll. This app had no prior pagination convention to match
+      either way; Load More lets the shared-`products`-array store use
+      one explicit branch (replace on page 1, append on page > 1)
+      without needing total-page-count tracking (page numbers) or a
+      scroll-position observer per list (infinite scroll) - and it's
+      deterministically testable (click once, assert growth and the
+      correct `hasMore` flip at the true last page).
+    - **Page size:** `12` everywhere except `OrdersTab.jsx`, which uses
+      `20` (`ORDERS_PAGE_SIZE`, a locally-scoped constant, matching this
+      codebase's existing convention of file-local named constants like
+      `SEARCH_DEBOUNCE_MS` in `Navbar.jsx`). Reasoning for the exception:
+      `OrdersTab` is an internal admin tool, not customer-facing
+      browsing - admins scanning order statuses benefit from seeing more
+      rows per page (fewer clicks, more triage context), and a table row
+      is far more information-dense per pixel than a product grid tile,
+      so a larger count doesn't cause the visual overload it would in a
+      grid. The interaction pattern (Load More) stays identical; only
+      the numeric limit differs.
+  - **HTTP compression:** added the `compression` npm package and
+    `app.use(compression())` in `backend/server.js`, placed before
+    `express.json()` in the middleware stack. No design decision
+    needed - standard placement.
+  - **`Promise.all` applied** at:
+    - `analytics.controller.js#getAnalyticsData`: `User.countDocuments()`
+      + `Product.countDocuments()` (already known from the prior audit).
+    - `analytics.route.js`: `getAnalyticsData()` +
+      `getDailySalesData()` (already known from the prior audit).
+    - `payment.controller.js#checkoutSuccess` (**new this pass**):
+      conditional `Coupon.findOneAndUpdate` (coupon deactivation) +
+      `createOrder(session)` + `User.findByIdAndUpdate(...cartItems:
+      [])` - three independent writes to three different documents.
+      `Promise.all`'s own reject-on-first-failure semantics preserve
+      the exact fail-fast-on-any-error behavior the sequential version
+      had.
+    - `product.controller.js#deleteProduct` (**new this pass**):
+      `cloudinary.uploader.destroy(...)` (conditional, already
+      swallowing its own errors) + `Product.findByIdAndDelete(...)` -
+      independent once the product/its image URL is already known from
+      the initial `findById`.
+    - Introduced as a direct consequence of adding pagination: the
+      `find().skip().limit()` + `countDocuments()` pair inside all five
+      newly-paginated endpoints, built as `Promise.all` from the start.
+    - Checked and confirmed **not** candidates (genuinely sequential,
+      left alone): `updateOrderStatus` (each step depends on the last);
+      `toggleFeaturedProduct`'s `save()` → cache rebuild (the rebuild
+      query must read post-save data or it caches stale state);
+      `createProduct`'s cloudinary upload → `Product.create()` (create
+      needs the upload's URL); `validateCoupon`'s `findOne()` →
+      conditional `save()`; `createOrder`'s idempotency check →
+      conditional `save()`.
+- **Rationale for revising scope to include the Monolith:** the prior
+  entry's reasoning for applying these four optimizations to *both*
+  Baseline and Enhanced (rather than Enhanced-only) was that none of
+  them are architectural to Enhanced, so Enhanced-only application would
+  let Comparison B misattribute implementation-quality gains to
+  architecture. That exact reasoning extends one comparison earlier:
+  none of the four are architectural to Baseline either, so applying
+  them to Baseline/Enhanced but not the Monolith would let Comparison A
+  (Monolith vs. Baseline) misattribute the *same* implementation-quality
+  gains to architecture. Applying uniformly across all three stages
+  isolates architecture as the sole variable in **both** comparisons,
+  using one consistent principle rather than a principle that stopped
+  one stage short of where it actually applies.
+- **Alternatives considered:** Leave the Monolith as originally scoped
+  (unoptimized), preserving the prior entry's conclusion - rejected once
+  it became clear the same misattribution risk the prior entry used to
+  justify Baseline+Enhanced applies equally to Monolith-vs-Baseline;
+  leaving it unaddressed would have been an inconsistency in this file's
+  own stated reasoning, not a considered choice.
+- **Verification:**
+  - **Indexes:** confirmed live via a direct query against the running
+    server's actual MongoDB connection (`Model.collection.indexes()`) -
+    all five present with the expected key specs
+    (`category_1`, `isFeatured_1`, `createdAt_-1` on products;
+    `user_1_createdAt_-1`, `createdAt_-1` on orders).
+  - **Pagination:** verified against the real dataset (27 products, 1
+    order) at exact page boundaries for all five endpoints - correct
+    `total`, no duplicate/missing IDs across pages, and `hasMore`
+    flipping to `false` exactly at the true last page (e.g. search
+    "cement": 7 total, limit 2, `hasMore` correctly `false` only on
+    page 4's 1 remaining item).
+  - **Compression:** confirmed `Content-Encoding: gzip` on response
+    headers; same endpoint's payload measured 2914 bytes uncompressed
+    vs. 952 bytes compressed on the wire (~67% reduction).
+  - **`Promise.all` equivalence:** analytics endpoint's combined output
+    checked for internal consistency (5 users, 27 products, 1 sale/
+    $76.89, matching the single order's actual date in the daily
+    breakdown). `deleteProduct` verified with a real create-then-delete
+    round trip against Cloudinary + MongoDB - both the DB removal and
+    the Cloudinary image deletion were confirmed to complete (server log
+    showed the Cloudinary destroy confirmation), matching the original
+    sequential version's effects, just now concurrent.
+  - **`checkoutSuccess`'s new `Promise.all` could not be verified via a
+    live end-to-end run** - this repo already has a documented,
+    pre-existing gap (`.env` has a placeholder Stripe key, noted in
+    `CLAUDE.md`'s "Current phase" section) that blocks any live Stripe
+    checkout round-trip, before or after this change. Verified at the
+    code level only: three writes to three different documents with no
+    data dependency between them, and `Promise.all`'s semantics preserve
+    the exact fail-fast-on-any-error behavior the sequential version had.
+    Recorded here explicitly rather than treated as silently covered.
+  - **Frontend:** real Playwright (headless Chromium) verification,
+    logged in as a throwaway admin test account (promoted to admin
+    directly in the database, deleted afterward). Admin `ProductsList`
+    Load More confirmed live (12 → 24 rows against the real 27-product
+    dataset, matching the API-level check). `OrdersTab` confirmed
+    rendering correctly (all 5 columns, real order data) and its status
+    dropdown change confirmed to persist after a real page refresh
+    (changed "processing" → "pending", reloaded, still "pending"; then
+    reverted back to "processing" to leave the real order unchanged).
+    `CategoryPage` (cement: 4 products) and `SearchResultsPage`
+    ("cement": 7 products) both correctly show **no** Load More button,
+    since their real datasets are under the 12-item page size -
+    `hasMore` was confirmed `false` at the API level for both; the Load
+    More mechanism itself (click → page+1 → append → hide-when-exhausted)
+    was proven live via the identical code path in `ProductsList`, so
+    this wasn't independently re-proven with artificially padded data
+    just to force the button to appear.
+- **Incidental finding during verification - not a bug in this app:** a
+  stray `test` database exists alongside `build-mart` in the same
+  MongoDB Atlas cluster, containing similarly-shaped collections. This
+  caused a real mix-up during admin-account promotion for testing (an
+  update was run against `test` instead of `build-mart`, silently
+  "succeeding" against the wrong database with no error, which is what
+  made it non-obvious until the resulting login still showed the
+  unpromoted role). Recorded here so it doesn't cause confusion again,
+  especially before any future scripting that might query broadly
+  across the cluster without pinning the database name explicitly.
+  Worth deciding whether the `test` database should be deleted entirely
+  once it's confirmed nothing in this project depends on it.
+- **Stage:** Monolith. (Baseline Microservices and Enhanced Microservices
+  already covered by the prior entry above; `services/` and
+  `frontend-baseline/` were not touched this session.)

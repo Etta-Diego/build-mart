@@ -1,4 +1,5 @@
 import Order from "../models/order.model.js";
+import { parsePagination, paginatedResponse } from "../lib/pagination.js";
 
 export async function createOrder(session) {
 	const existingOrder = await Order.findOne({ stripeSessionId: session.id });
@@ -42,11 +43,18 @@ export const getOrderById = async (req, res) => {
 
 export const getUserOrders = async (req, res) => {
 	try {
-		const orders = await Order.find({ user: req.user._id })
-			.sort({ createdAt: -1 })
-			.populate("products.product", "name image price");
+		const { page, limit, skip } = parsePagination(req.query);
+		const filter = { user: req.user._id };
+		const [orders, total] = await Promise.all([
+			Order.find(filter)
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(limit)
+				.populate("products.product", "name image price"),
+			Order.countDocuments(filter),
+		]);
 
-		res.json(orders);
+		res.json(paginatedResponse(orders, total, page, limit));
 	} catch (error) {
 		console.log("Error in getUserOrders controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });
@@ -55,12 +63,18 @@ export const getUserOrders = async (req, res) => {
 
 export const getAllOrders = async (req, res) => {
 	try {
-		const orders = await Order.find({})
-			.sort({ createdAt: -1 })
-			.populate("user", "name email")
-			.populate("products.product", "name image price");
+		const { page, limit, skip } = parsePagination(req.query);
+		const [orders, total] = await Promise.all([
+			Order.find({})
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(limit)
+				.populate("user", "name email")
+				.populate("products.product", "name image price"),
+			Order.countDocuments({}),
+		]);
 
-		res.json(orders);
+		res.json(paginatedResponse(orders, total, page, limit));
 	} catch (error) {
 		console.log("Error in getAllOrders controller", error.message);
 		res.status(500).json({ message: "Server error", error: error.message });

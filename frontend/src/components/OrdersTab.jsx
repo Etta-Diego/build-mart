@@ -4,24 +4,47 @@ import axios from "../lib/axios";
 
 const ORDER_STATUSES = ["pending", "processing", "shipped", "delivered", "cancelled"];
 
+// Larger than the 12 used for customer-facing product grids/search: this is
+// an internal admin tool where scanning more rows at once (fewer clicks)
+// matters more than the visual density concerns of a product grid - see
+// docs/decision_log.md.
+const ORDERS_PAGE_SIZE = 20;
+
 const OrdersTab = () => {
 	const [orders, setOrders] = useState([]);
 	const [isLoading, setIsLoading] = useState(true);
+	const [isLoadingMore, setIsLoadingMore] = useState(false);
+	const [pagination, setPagination] = useState({ total: 0, page: 1, limit: ORDERS_PAGE_SIZE, hasMore: false });
+
+	const fetchOrders = async (page) => {
+		const response = await axios.get(`/orders/all?page=${page}&limit=${ORDERS_PAGE_SIZE}`);
+		const { data, total, limit, hasMore } = response.data;
+		setOrders((prev) => (page === 1 ? data : [...prev, ...data]));
+		setPagination({ total, page, limit, hasMore });
+	};
 
 	useEffect(() => {
-		const fetchOrders = async () => {
+		(async () => {
 			try {
-				const response = await axios.get("/orders/all");
-				setOrders(response.data);
+				await fetchOrders(1);
 			} catch (error) {
 				console.error("Error fetching orders:", error);
 			} finally {
 				setIsLoading(false);
 			}
-		};
-
-		fetchOrders();
+		})();
 	}, []);
+
+	const handleLoadMore = async () => {
+		setIsLoadingMore(true);
+		try {
+			await fetchOrders(pagination.page + 1);
+		} catch (error) {
+			console.error("Error fetching orders:", error);
+		} finally {
+			setIsLoadingMore(false);
+		}
+	};
 
 	const handleStatusChange = async (orderId, status) => {
 		try {
@@ -37,6 +60,7 @@ const OrdersTab = () => {
 	}
 
 	return (
+		<>
 		<motion.div
 			className='bg-[#111827] shadow-lg rounded-lg overflow-hidden max-w-6xl mx-auto border border-gray-700'
 			initial={{ opacity: 0, y: 20 }}
@@ -123,6 +147,18 @@ const OrdersTab = () => {
 				</tbody>
 			</table>
 		</motion.div>
+		{pagination.hasMore && (
+			<div className='flex justify-center mt-6'>
+				<button
+					onClick={handleLoadMore}
+					disabled={isLoadingMore}
+					className='bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-6 py-2 rounded-md font-medium transition duration-300 ease-in-out'
+				>
+					{isLoadingMore ? "Loading..." : "Load More"}
+				</button>
+			</div>
+		)}
+		</>
 	);
 };
 export default OrdersTab;

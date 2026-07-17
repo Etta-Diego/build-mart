@@ -10,8 +10,13 @@ import axios from "../lib/axios";
 // docs/decision_log.md).
 let searchAbortController = null;
 
+const DEFAULT_PAGE_SIZE = 12;
+
+const INITIAL_PAGINATION = { total: 0, page: 1, limit: DEFAULT_PAGE_SIZE, hasMore: false };
+
 export const useProductStore = create((set) => ({
 	products: [],
+	pagination: INITIAL_PAGINATION,
 	loading: false,
 
 	setProducts: (products) => set({ products }),
@@ -28,21 +33,33 @@ export const useProductStore = create((set) => ({
 			set({ loading: false });
 		}
 	},
-	fetchAllProducts: async () => {
+	fetchAllProducts: async ({ page = 1 } = {}) => {
 		set({ loading: true });
 		try {
-			const response = await axios.get("/products");
-			set({ products: response.data.products, loading: false });
+			const response = await axios.get(`/products?page=${page}&limit=${DEFAULT_PAGE_SIZE}`);
+			const { data, total, limit, hasMore } = response.data;
+			set((prevState) => ({
+				products: page === 1 ? data : [...prevState.products, ...data],
+				pagination: { total, page, limit, hasMore },
+				loading: false,
+			}));
 		} catch (error) {
 			set({ error: "Failed to fetch products", loading: false });
 			toast.error(error.response.data.error || "Failed to fetch products");
 		}
 	},
-	fetchProductsByCategory: async (category) => {
+	fetchProductsByCategory: async (category, { page = 1 } = {}) => {
 		set({ loading: true });
 		try {
-			const response = await axios.get(`/products/category/${category}`);
-			set({ products: response.data.products, loading: false });
+			const response = await axios.get(
+				`/products/category/${category}?page=${page}&limit=${DEFAULT_PAGE_SIZE}`
+			);
+			const { data, total, limit, hasMore } = response.data;
+			set((prevState) => ({
+				products: page === 1 ? data : [...prevState.products, ...data],
+				pagination: { total, page, limit, hasMore },
+				loading: false,
+			}));
 		} catch (error) {
 			set({ error: "Failed to fetch products", loading: false });
 			toast.error(error.response.data.error || "Failed to fetch products");
@@ -87,30 +104,37 @@ export const useProductStore = create((set) => ({
 			console.log("Error fetching featured products:", error);
 		}
 	},
-	searchProducts: async (query) => {
+	searchProducts: async (query, { page = 1 } = {}) => {
 		// Guard lives here, not in the caller - this is the one place that
 		// decides whether the network is hit at all, regardless of whether
 		// the caller is Navbar's debounced input or a direct visit to a bare
 		// /search URL with no query.
 		if (!query || !query.trim()) {
 			searchAbortController?.abort();
-			set({ products: [] });
+			set({ products: [], pagination: INITIAL_PAGINATION });
 			return;
 		}
 
 		// Cancel whatever search is still in flight before starting this one,
 		// so an older, slower response can never land after and overwrite a
-		// newer, faster one.
+		// newer, faster one. Load More is just another call here, so it gets
+		// the same cancellation semantics as a fresh query.
 		searchAbortController?.abort();
 		const controller = new AbortController();
 		searchAbortController = controller;
 
 		set({ loading: true });
 		try {
-			const response = await axios.get(`/products/search?q=${encodeURIComponent(query.trim())}`, {
-				signal: controller.signal,
-			});
-			set({ products: response.data, loading: false });
+			const response = await axios.get(
+				`/products/search?q=${encodeURIComponent(query.trim())}&page=${page}&limit=${DEFAULT_PAGE_SIZE}`,
+				{ signal: controller.signal }
+			);
+			const { data, total, limit, hasMore } = response.data;
+			set((prevState) => ({
+				products: page === 1 ? data : [...prevState.products, ...data],
+				pagination: { total, page, limit, hasMore },
+				loading: false,
+			}));
 		} catch (error) {
 			if (error.code === "ERR_CANCELED") {
 				return; // superseded by a newer search - not a real error

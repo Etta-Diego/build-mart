@@ -31,6 +31,15 @@ const productSchema = new mongoose.Schema(
 	{ timestamps: true }
 );
 
+// category/isFeatured are the two filters used for browsing/curation
+// lookups (getProductsByCategory, getFeaturedProducts); createdAt backs
+// the stable sort pagination relies on (skip/limit needs a deterministic
+// order or page boundaries can return duplicate/missing items) - see
+// docs/decision_log.md.
+productSchema.index({ category: 1 });
+productSchema.index({ isFeatured: 1 });
+productSchema.index({ createdAt: -1 });
+
 const Product = mongoose.model("Product", productSchema);
 
 export default Product;

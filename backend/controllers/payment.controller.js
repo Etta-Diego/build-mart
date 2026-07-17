@@ -80,21 +80,26 @@ export const checkoutSuccess = async (req, res) => {
 		const session = await stripe.checkout.sessions.retrieve(sessionId);
 
 		if (session.payment_status === "paid") {
-			if (session.metadata.couponCode) {
-				await Coupon.findOneAndUpdate(
-					{
-						code: session.metadata.couponCode,
-						userId: session.metadata.userId,
-					},
-					{
-						isActive: false,
-					}
-				);
-			}
+			// Three independent writes to three different documents - none
+			// depends on another's result, so the fail-fast-on-any-rejection
+			// behavior this had sequentially is preserved by Promise.all itself.
+			const deactivateCoupon = session.metadata.couponCode
+				? Coupon.findOneAndUpdate(
+						{
+							code: session.metadata.couponCode,
+							userId: session.metadata.userId,
+						},
+						{
+							isActive: false,
+						}
+				  )
+				: Promise.resolve(null);
 
-			const newOrder = await createOrder(session);
-
-			await User.findByIdAndUpdate(session.metadata.userId, { cartItems: [] });
+			const [, newOrder] = await Promise.all([
+				deactivateCoupon,
+				createOrder(session),
+				User.findByIdAndUpdate(session.metadata.userId, { cartItems: [] }),
+			]);
 
 			res.status(200).json({
 				success: true,

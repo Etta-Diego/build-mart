@@ -44,6 +44,12 @@ const orderSchema = new mongoose.Schema(
 	{ timestamps: true }
 );
 
+// Compound index covers getUserOrders' filter (user) + sort (createdAt)
+// together; the separate createdAt-only index covers getAllOrders, which
+// sorts with no user filter and so can't use the compound index's prefix.
+orderSchema.index({ user: 1, createdAt: -1 });
+orderSchema.index({ createdAt: -1 });
+
 const Order = mongoose.model("Order", orderSchema);
 
 export default Order;

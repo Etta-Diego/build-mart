@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
+import compression from "compression";
 import path from "path";
 
 import { metricsMiddleware, register, markReady } from "./lib/metrics.js";
@@ -24,6 +25,7 @@ const __dirname = path.resolve();
 
 app.use(metricsMiddleware);
 
+app.use(compression());
 app.use(express.json({ limit: "10mb" })); // allows you to parse the body of the request
 app.use(cookieParser());
 
