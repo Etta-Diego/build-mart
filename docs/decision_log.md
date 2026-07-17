@@ -2489,3 +2489,93 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Baseline Microservices (mirrors the Monolith's pagination
   portion of the `v1.4-monolith-baseline` four-optimizations entry;
   compression/`Promise.all` mirroring still pending as Parts 3-4).
+
+### [2026-07-17] Compression mirrored into Baseline Microservices - Stage 2, Part 3 of 4 of the optimization pass
+- **Decision:** Added the `compression` npm package (`^1.8.1`, matching
+  the monolith's pinned version) and `app.use(compression())` to all
+  five Baseline services - `product-service`, `user-service`,
+  `cart-service`, `coupon-service`, `order-service` - placed immediately
+  after `app.use(metricsMiddleware)` and before every other middleware
+  (`cors`, `express.json`, `cookieParser`), mirroring the monolith's own
+  adjacency (`metricsMiddleware` → `compression` → body-parsing) from
+  `v1.4-monolith-baseline`'s `backend/server.js` exactly. The monolith
+  has no `cors` middleware to anchor against (single-origin), so
+  "immediately after metrics" was the more literal match to preserve
+  than "immediately before `express.json`," and the two are functionally
+  equivalent anyway since CORS doesn't touch response bodies.
+  Lightest of the four optimizations by design: no response-shape
+  changes, no route changes, no `frontend-baseline` changes at all -
+  compression is transparent to application code, so this part touched
+  only five `server.js` files and their five `package.json`/
+  `package-lock.json`.
+- **Verification - `Content-Encoding: gzip` and real before/after byte
+  counts**, same method proven for the monolith (`curl` with
+  `Accept-Encoding: gzip` vs `Accept-Encoding: identity`, comparing the
+  actual bytes-on-the-wire, not just header presence), run against each
+  service's own already-running instance with a meaningfully-sized real
+  response:
+  - **Product Service** - `GET /api/products?page=1&limit=100` (all 27
+    real products, admin route): `Content-Encoding: gzip` present;
+    **11023 → 2818 bytes (74.4% reduction)**.
+  - **Order Service** - `GET /api/orders/all?page=1&limit=20` (the 1
+    real order, fully cross-service-enriched with product and user
+    details): `Content-Encoding: gzip` present; **2292 → 917 bytes
+    (60.0% reduction)**.
+  - **Cart Service** - `GET /api/cart`: the real test account's actual
+    cart only had 2 items (864 bytes, under the threshold - see below),
+    so a throwaway user id (not a real account, never touched via
+    signup/login) had 6 real products added to its Redis cart hash via
+    the live `addToCart` endpoint, measured, then removed via `DELETE
+    /api/cart` immediately after - confirmed empty (`[]`) afterward, and
+    the real test account's own 2-item cart (864 bytes) reconfirmed
+    unchanged throughout. `Content-Encoding: gzip` present on the
+    6-item response; **2482 → 848 bytes (65.8% reduction)**.
+  - **User Service and Coupon Service - real app payloads fall under
+    `compression`'s default 1024-byte threshold, so `Content-Encoding:
+    gzip` correctly does NOT appear on them, and this is expected
+    behavior, not a wiring gap:**
+    - User Service's largest realistic payload, `POST
+      /api/auth/users/batch`, requested with all 5 real users in the
+      current dataset (the entire user base): 409 bytes uncompressed,
+      409 bytes with `Accept-Encoding: gzip` sent - identical, no
+      `Content-Encoding` header, because 409 bytes never reaches the
+      threshold `compression` uses to decide whether the CPU cost of
+      compressing is worth it. This isn't a scenario that can be made
+      "meaningfully sized" without inventing user accounts that don't
+      reflect the real dataset, so it's reported honestly as-is rather
+      than staged artificially.
+    - Coupon Service's only payload shape, `GET /api/coupons`, is a
+      single coupon object - inherently small by the schema's own
+      field count (`code`, `discountPercentage`, `expirationDate`,
+      `isActive`, `userId`, timestamps). A throwaway coupon was created
+      (via the same throwaway user id used for the Cart Service check,
+      not a real account) to get a real non-null measurement rather than
+      the real test account's `null` (4 bytes): 260 bytes uncompressed,
+      260 bytes with gzip requested - again under threshold, again
+      expected. The throwaway coupon was deleted immediately after
+      measuring.
+    - **To confirm this is genuinely the 1024-byte threshold and not a
+      broken/missing middleware install on these two services**, both
+      were also checked against their own `/metrics` endpoint (`prom-
+      client` output, inherently larger than any of this project's JSON
+      payloads): User Service **5726 → 663 bytes (88.4% reduction)**,
+      Coupon Service **5575 → 653 bytes (88.3% reduction)**, both with
+      `Content-Encoding: gzip` correctly present. This proves
+      `compression()` is correctly wired into both services' middleware
+      stacks and activates normally once a response crosses the
+      threshold - the absence of compression on their real application
+      payloads is a property of those payloads' size, not a defect in
+      this pass.
+  - All temporary state (throwaway cart items, throwaway coupon) was
+    created under a throwaway user id never used for signup/login, and
+    removed before this entry was written; no real account or dataset
+    was left modified.
+- **Scope discipline:** `Promise.all` remains out of scope for this
+  session - Part 4, the last piece, to be verified independently once
+  this part is confirmed. No `frontend-baseline` changes were needed or
+  made, consistent with compression being transparent to application
+  code.
+- **Stage:** Baseline Microservices (mirrors the Monolith's compression
+  portion of the `v1.4-monolith-baseline` four-optimizations entry;
+  `Promise.all` mirroring still pending as Part 4, the last of the
+  four).

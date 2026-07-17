@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import compression from "compression";
 
 import { metricsMiddleware, register, markReady } from "./lib/metrics.js";
 import productRoutes from "./routes/product.route.js";
@@ -13,6 +14,8 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 app.use(metricsMiddleware);
+
+app.use(compression());
 
 // Baseline Microservices has no API Gateway yet, so a browser client
 // talking directly to this service is a genuine cross-origin request
