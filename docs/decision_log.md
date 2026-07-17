@@ -2279,28 +2279,35 @@ Written for direct reuse in the dissertation's methodology chapter.
   sort stability) already anticipates Part 2. `frontend-baseline/` was
   not touched: indexes are a backend/database-only change with no
   frontend-visible effect.
-- **Verification:** Live, direct query against each service's own real
-  MongoDB connection (`Model.collection.indexes()`), same method already
-  proven in the monolith - adapted only in that a temporary
-  `_verify_indexes_tmp.js` script (deleted immediately after use, never
-  committed) called `await Model.init()` before reading
-  `.collection.indexes()`, since Mongoose's autoIndex build after
-  `connectDB()` runs in the background and a same-tick read raced ahead
-  of it, initially showing only the default `_id_` index; `Model.init()`
-  resolves once index building genuinely completes, and the same-tick
-  race meant this had to be added even though the monolith's original
-  verification apparently didn't need it (likely because its server had
-  already been running with the new indexes for a while by the time it
-  was checked, not a difference in correctness). No DNS SRV issue
-  recurred this session (`DNS_WORKAROUND=true` already set in both
-  services' `.env`, inherited from Stage 2's initial setup) - noted
-  since the task anticipated needing to adapt for it.
-  - Product Service (`product-service-db`): confirmed
-    `category_1`, `isFeatured_1`, `createdAt_-1` all present alongside
-    the default `_id_` index.
-  - Order Service (`order-service-db`): confirmed `user_1_createdAt_-1`
-    and `createdAt_-1` present, alongside the pre-existing
-    `stripeSessionId_1` (`unique: true`) and default `_id_` indexes.
+- **Verification:** Used the same specific method already proven in the
+  monolith - a temporary debug route added to each service's own
+  `server.js`, querying `Model.collection.indexes()` through the
+  connection the running server itself already established via its
+  normal `connectDB()` startup path, hit once via a plain HTTP request
+  against the live, already-started service, then removed before commit
+  (confirmed via `git diff` showing an empty diff on both `server.js`
+  files afterward - no leftover route). This is a deliberate change from
+  an earlier attempt this session that used a standalone script opening
+  its own short-lived connection: that script's same-tick read of
+  `.collection.indexes()` raced ahead of Mongoose's background autoIndex
+  build and initially showed only the default `_id_` index. Querying
+  through an already-running server sidesteps that race entirely - by
+  the time the route is hit, the server has been up long enough for
+  autoIndex to have finished - so no workaround (like `Model.init()`)
+  was needed, and the method matches the monolith's exactly rather than
+  re-deriving a per-service fix. No DNS SRV issue recurred
+  (`DNS_WORKAROUND=true` already set in both services' `.env`, inherited
+  from Stage 2's initial setup).
+  - Product Service (`product-service-db`, `node src/server.js`, port
+    `5001`): `GET /debug/indexes` returned `category_1`, `isFeatured_1`,
+    `createdAt_-1`, alongside the default `_id_` index.
+  - Order Service (`order-service-db`, `node src/server.js`, port
+    `5005`): `GET /debug/indexes` returned `user_1_createdAt_-1` and
+    `createdAt_-1`, alongside the pre-existing `stripeSessionId_1`
+    (`unique: true`) and default `_id_` indexes.
+  - Both services stopped and their temporary `/debug/indexes` routes
+    reverted immediately after use; neither route nor the extra model
+    import was committed.
 - **Stage:** Baseline Microservices (mirrors the Monolith's index
   portion of the `v1.4-monolith-baseline` four-optimizations entry
   above; pagination/compression/`Promise.all` mirroring still pending as
