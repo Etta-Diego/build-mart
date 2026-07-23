@@ -27,21 +27,6 @@ const storeRefreshToken = async (userId, refreshToken) => {
 	await redis.set(`refresh_token:${userId}`, refreshToken, "EX", 7 * 24 * 60 * 60); // 7days
 };
 
-const setCookies = (res, accessToken, refreshToken) => {
-	res.cookie("accessToken", accessToken, {
-		httpOnly: true, // prevent XSS attacks, cross site scripting attack
-		secure: process.env.NODE_ENV === "production",
-		sameSite: "strict", // prevents CSRF attack, cross-site request forgery attack
-		maxAge: 15 * 60 * 1000, // 15 minutes
-	});
-	res.cookie("refreshToken", refreshToken, {
-		httpOnly: true, // prevent XSS attacks, cross site scripting attack
-		secure: process.env.NODE_ENV === "production",
-		sameSite: "strict", // prevents CSRF attack, cross-site request forgery attack
-		maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-	});
-};
-
 export const signup = async (req, res) => {
 	const { email, password, name } = req.body;
 	try {
@@ -55,8 +40,6 @@ export const signup = async (req, res) => {
 		// authenticate
 		const { accessToken, refreshToken } = generateTokens(user._id, user.role);
 		await storeRefreshToken(user._id, refreshToken);
-
-		setCookies(res, accessToken, refreshToken);
 
 		res.status(201).json({
 			_id: user._id,
@@ -80,7 +63,6 @@ export const login = async (req, res) => {
 		if (user && (await user.comparePassword(password))) {
 			const { accessToken, refreshToken } = generateTokens(user._id, user.role);
 			await storeRefreshToken(user._id, refreshToken);
-			setCookies(res, accessToken, refreshToken);
 
 			res.json({
 				_id: user._id,
@@ -101,14 +83,12 @@ export const login = async (req, res) => {
 
 export const logout = async (req, res) => {
 	try {
-		const refreshToken = req.cookies.refreshToken;
+		const refreshToken = req.body.refreshToken;
 		if (refreshToken) {
 			const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
 			await redis.del(`refresh_token:${decoded.userId}`);
 		}
 
-		res.clearCookie("accessToken");
-		res.clearCookie("refreshToken");
 		res.json({ message: "Logged out successfully" });
 	} catch (error) {
 		console.log("Error in logout controller", error.message);
@@ -119,7 +99,7 @@ export const logout = async (req, res) => {
 // this will refresh the access token
 export const refreshToken = async (req, res) => {
 	try {
-		const refreshToken = req.cookies.refreshToken;
+		const refreshToken = req.body.refreshToken;
 
 		if (!refreshToken) {
 			return res.status(401).json({ message: "No refresh token provided" });
@@ -134,13 +114,6 @@ export const refreshToken = async (req, res) => {
 
 		const accessToken = jwt.sign({ userId: decoded.userId, role: decoded.role }, process.env.ACCESS_TOKEN_SECRET, {
 			expiresIn: "15m",
-		});
-
-		res.cookie("accessToken", accessToken, {
-			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
-			sameSite: "strict",
-			maxAge: 15 * 60 * 1000,
 		});
 
 		res.json({ message: "Token refreshed successfully", accessToken, refreshToken });
