@@ -31,28 +31,33 @@ jobs:
 
       - name: Build & push user-service
         run: |
-          docker build -t $ECR_REGISTRY/buildmart-user-service:latest services/user-service
+          docker build -t $ECR_REGISTRY/buildmart-user-service:latest -t $ECR_REGISTRY/buildmart-user-service:$GITHUB_SHA services/user-service
           docker push $ECR_REGISTRY/buildmart-user-service:latest
+          docker push $ECR_REGISTRY/buildmart-user-service:$GITHUB_SHA
 
       - name: Build & push product-service
         run: |
-          docker build -t $ECR_REGISTRY/buildmart-product-service:latest services/product-service
+          docker build -t $ECR_REGISTRY/buildmart-product-service:latest -t $ECR_REGISTRY/buildmart-product-service:$GITHUB_SHA services/product-service
           docker push $ECR_REGISTRY/buildmart-product-service:latest
+          docker push $ECR_REGISTRY/buildmart-product-service:$GITHUB_SHA
 
       - name: Build & push cart-service
         run: |
-          docker build -t $ECR_REGISTRY/buildmart-cart-service:latest services/cart-service
+          docker build -t $ECR_REGISTRY/buildmart-cart-service:latest -t $ECR_REGISTRY/buildmart-cart-service:$GITHUB_SHA services/cart-service
           docker push $ECR_REGISTRY/buildmart-cart-service:latest
+          docker push $ECR_REGISTRY/buildmart-cart-service:$GITHUB_SHA
 
       - name: Build & push coupon-service
         run: |
-          docker build -t $ECR_REGISTRY/buildmart-coupon-service:latest services/coupon-service
+          docker build -t $ECR_REGISTRY/buildmart-coupon-service:latest -t $ECR_REGISTRY/buildmart-coupon-service:$GITHUB_SHA services/coupon-service
           docker push $ECR_REGISTRY/buildmart-coupon-service:latest
+          docker push $ECR_REGISTRY/buildmart-coupon-service:$GITHUB_SHA
 
       - name: Build & push order-service
         run: |
-          docker build -t $ECR_REGISTRY/buildmart-order-service:latest services/order-service
+          docker build -t $ECR_REGISTRY/buildmart-order-service:latest -t $ECR_REGISTRY/buildmart-order-service:$GITHUB_SHA services/order-service
           docker push $ECR_REGISTRY/buildmart-order-service:latest
+          docker push $ECR_REGISTRY/buildmart-order-service:$GITHUB_SHA
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
@@ -60,20 +65,20 @@ jobs:
       - name: Update kubeconfig for buildmart-enhanced
         run: aws eks update-kubeconfig --name $EKS_CLUSTER --region $AWS_REGION
 
-      - name: Restart rollout - user-service
-        run: kubectl rollout restart deployment/user-service -n $NAMESPACE
+      - name: Deploy image - user-service
+        run: kubectl set image deployment/user-service user-service=$ECR_REGISTRY/buildmart-user-service:$GITHUB_SHA -n $NAMESPACE
 
-      - name: Restart rollout - product-service
-        run: kubectl rollout restart deployment/product-service -n $NAMESPACE
+      - name: Deploy image - product-service
+        run: kubectl set image deployment/product-service product-service=$ECR_REGISTRY/buildmart-product-service:$GITHUB_SHA -n $NAMESPACE
 
-      - name: Restart rollout - cart-service
-        run: kubectl rollout restart deployment/cart-service -n $NAMESPACE
+      - name: Deploy image - cart-service
+        run: kubectl set image deployment/cart-service cart-service=$ECR_REGISTRY/buildmart-cart-service:$GITHUB_SHA -n $NAMESPACE
 
-      - name: Restart rollout - coupon-service
-        run: kubectl rollout restart deployment/coupon-service -n $NAMESPACE
+      - name: Deploy image - coupon-service
+        run: kubectl set image deployment/coupon-service coupon-service=$ECR_REGISTRY/buildmart-coupon-service:$GITHUB_SHA -n $NAMESPACE
 
-      - name: Restart rollout - order-service
-        run: kubectl rollout restart deployment/order-service -n $NAMESPACE
+      - name: Deploy image - order-service
+        run: kubectl set image deployment/order-service order-service=$ECR_REGISTRY/buildmart-order-service:$GITHUB_SHA -n $NAMESPACE
 
       - name: Wait for rollout - user-service
         run: kubectl rollout status deployment/user-service -n $NAMESPACE --timeout=180s
