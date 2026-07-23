@@ -8,6 +8,7 @@ import CategoryPage from "./pages/CategoryPage";
 import SearchResultsPage from "./pages/SearchResultsPage";
 
 import Navbar from "./components/Navbar";
+import AppBadge from "./components/AppBadge";
 import { Toaster } from "react-hot-toast";
 import { useUserStore } from "./stores/useUserStore";
 import { useEffect } from "react";
@@ -63,6 +64,7 @@ dark:bg-[radial-gradient(ellipse_at_top,rgba(249,115,22,0.25)_0%,rgba(17,24,39,0
 				</Routes>
 			</div>
 			<Toaster />
+			<AppBadge />
 		</div>
 	);
 }
