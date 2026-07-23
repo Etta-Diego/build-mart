@@ -2739,3 +2739,524 @@ Written for direct reuse in the dissertation's methodology chapter.
   meant to measure, per this file's running principle since the first
   four-optimizations entry. Enhanced Microservices (Stage 3) has not
   been started.
+
+### [2026-07-18] Baseline-mirroring commits (2fb7490, 7bf2021, 7e29617, 68bb5ca, 6b804ad) accepted via lighter-touch review, not full re-verification
+- **Decision:** These five commits - the four-part optimization pass
+  mirrored into Baseline Microservices, plus one re-verification commit -
+  were made in a Claude Code session not captured in the current
+  conversation transcript (a prior session ended unexpectedly; this
+  conversation resumed without memory of that work happening). Rather
+  than redo the full verification standard applied elsewhere in this
+  project, they were accepted after a lighter-touch review: skimming the
+  five commits' diffs, plus one live check (hit Product Service's
+  `GET /api/products/category/:category?page=&limit=` directly - response
+  matched the documented `{ data, total, page, limit, hasMore }` contract
+  exactly: `total: 4, page: 1, limit: 3, hasMore: true` for the `cement`
+  category, consistent with the monolith's own verified result for the
+  same category).
+- **Rationale:** Time constraints on this pass of the project didn't
+  allow for redoing the same exhaustive verification (direct-DB index
+  checks, full Playwright runs per service, live before/after byte
+  counts, etc.) the commits themselves already claim to have done. The
+  diffs read as genuine, careful engineering rather than superficial
+  mirroring - notably `6b804ad`'s fix for a real unhandled-rejection
+  crash risk in `updateOrderStatus`'s concurrent enrichment, which is not
+  the kind of detail a low-effort mirror would surface - so the claims in
+  each commit message were judged credible on inspection rather than
+  re-proven from scratch.
+- **What this is not:** this is not the same standard of confidence as
+  every other verified entry in this file. It is recorded honestly as a
+  lighter-touch acceptance, not upgraded to "verified" after the fact.
+  If a discrepancy in Baseline Microservices' behavior surfaces later,
+  this entry is the place to look first.
+- **Stage:** Baseline Microservices.
+
+### [2026-07-20] docker-compose.yml extended to run all five Baseline services alongside local Mongo/Redis
+- **Decision:** Added `product-service`, `user-service`, `cart-service`,
+  `coupon-service`, and `order-service` to the root `docker-compose.yml`,
+  alongside the pre-existing `mongo`/`redis` dev-infra services. Each
+  service: `build:` points at its own `services/<name>/Dockerfile`;
+  `env_file: ./services/<name>/.env` loads its real secrets unchanged
+  (Cloudinary, Stripe, `ACCESS_TOKEN_SECRET`, `INTERNAL_SERVICE_KEY`,
+  etc.); an `environment:` block overrides only the network-topology
+  vars (`MONGO_URI`, `REDIS_URL`, inter-service `*_SERVICE_URL`s) to
+  point at Docker network service names (`mongo`, `redis`,
+  `product-service`, etc.) instead of `localhost`. `cart-service` has no
+  `MONGO_URI` override and no `mongo` in `depends_on` - confirmed via its
+  `.env.example`, it has no Mongo dependency at all (Redis-backed cart
+  data, per the Stage 2 Cart-as-Redis-Hash decision already on record).
+  Each service keeps its own logical database on the shared `mongo`
+  container (`product-service-db`, `user-service-db`, etc.), matching
+  each service's existing `.env.example` with only the host swapped.
+- **Naming collision hit, and its resolution:** running `up` under a
+  deliberately distinct project name (`-p buildmart`, no hyphen, chosen
+  specifically to avoid repeating the collision `docker-compose.sanity-
+  check.yml`'s own header already documents) failed instead:
+  `build-mart-mongo-1`/`build-mart-redis-1` were already running under
+  Compose's implicit default project name (`build-mart`, hyphenated,
+  derived from the folder name) from an earlier, plain `docker compose
+  up` with no `-p` flag - so the new `buildmart` project's `mongo`/
+  `redis` containers collided on the same host ports (27017, 6379)
+  instead. Resolved by using `-p build-mart` (matching the already-
+  running project exactly) instead of inventing a new name - this
+  attaches to/extends the existing project rather than creating a
+  parallel one, reusing the already-running `mongo`/`redis` containers
+  as-is and just adding the five new service containers to that same
+  project. Confirmed before switching that the existing local `mongo`
+  container held no real data worth preserving (only `admin`/`config`/
+  `local` system databases - the actual application data lives in
+  Atlas, per every service's real `.env`). The failed `buildmart`
+  (no-hyphen) attempt's empty containers/network/volumes were torn down
+  and removed before retrying.
+- **Verification:** `docker compose -p build-mart build` succeeded for
+  all five images; `up -d` brought up all 7 containers, all 5 services
+  reaching Docker's own `(healthy)` status via their Dockerfile-defined
+  `/metrics` healthchecks. Then ran a genuine, complete end-to-end order
+  flow through the running containers, not a mock:
+  1. Signed up a throwaway user via containerized User Service, promoted
+     to admin via a direct `docker exec mongosh` write against the
+     local container's `user-service-db` (low-risk - local-only
+     throwaway test infra, not the shared Atlas cluster), logged in
+     again to pick up the refreshed role in the JWT.
+  2. Created a throwaway product via containerized Product Service
+     (real Cloudinary upload, same account used throughout this
+     project).
+  3. Added it to cart via containerized Cart Service - confirmed Cart
+     Service's cross-service call to Product Service over the internal
+     Docker network (`PRODUCT_SERVICE_URL=http://product-service:5001`)
+     correctly resolved full product details.
+  4. Created a Stripe Checkout Session via containerized Order Service -
+     unlike the Monolith's documented placeholder-Stripe-key gap, Order
+     Service's real `.env` has a genuine Stripe **test** secret key, so
+     a full live round-trip was actually possible here.
+  5. Fetched the session's hosted checkout URL directly from Stripe's
+     API and drove it with Playwright (headless Chromium), filling
+     Stripe's own test card (4242 4242 4242 4242) and submitting -
+     genuinely completes a real Stripe test-mode payment, not a
+     simulated one. Confirmed redirect to the configured
+     `success_url` with the session id attached.
+  6. Called Order Service's `checkout-success` with that session id -
+     response confirmed `success: true` and a real `orderId`.
+  7. Confirmed the order via direct fetch and via the paginated
+     `getUserOrders` list (correct product/price/`stripeSessionId`,
+     `total: 1`, `hasMore: false`); confirmed Cart Service's cart was
+     actually emptied afterward (best-effort `clearCart` call from
+     `checkoutSuccess` succeeded).
+  8. Cleaned up all throwaway state: order, product, and user deleted
+     directly from their respective local databases, plus the orphaned
+     Cloudinary test image (created via direct product deletion outside
+     the API, so its own Cloudinary-cleanup `Promise.all` never ran -
+     removed separately via a direct signed Cloudinary API call).
+     Re-confirmed all 7 containers still `(healthy)`/`Up` afterward.
+- **Rationale:** This is the first time Baseline Microservices' actual
+  inter-service HTTP calls (Cart → Product, Order → Cart/Coupon/Product/
+  User) have been exercised over a real Docker network rather than each
+  service running as a bare `node` process reachable via `localhost` -
+  a meaningfully different, more representative test of the
+  microservices deployment topology this dissertation's Comparison B is
+  actually about, and a natural precursor to the Kubernetes work Stage 3
+  will build on.
+- **Stage:** Baseline Microservices (containerization/local orchestration
+  groundwork for Stage 3).
+
+### [2026-07-20] frontend-enhanced/ created ahead of the API Gateway, using Baseline's direct-service-URL pattern as a deliberate, temporary stopgap
+- **Decision:** Created `frontend-enhanced/` as a genuine copy of
+  `frontend-baseline/` (`robocopy /E`, excluding `node_modules`/`dist`,
+  then an independent `npm install` - the same "duplicate, don't share"
+  pattern used for `frontend-baseline/`'s own creation, and explicitly
+  predicted in that entry). `frontend-baseline/` itself confirmed
+  untouched via `git status` before and after.
+  - Points at the same five direct service URLs (`localhost:5001`-
+    `5005`) `frontend-baseline` uses - **this is temporary**, since
+    Stage 3's API Gateway doesn't exist yet. A `// TODO` comment in
+    `src/lib/api.js` and a comment block in `.env.example` both state
+    explicitly: once the API Gateway is built, replace these five URLs
+    with a single Gateway URL.
+- **Rationale:** Building the Enhanced frontend now, ahead of the
+  Gateway it will eventually depend on, unblocks local testing of
+  Enhanced Microservices work as it's built and avoids port confusion
+  between three otherwise-identical frontends - at the cost of
+  `frontend-enhanced/` not yet reflecting its actual target
+  architecture (single Gateway origin). This is explicitly **not** the
+  final Enhanced configuration; it will need revisiting once the
+  Gateway exists.
+- **Stage:** Enhanced Microservices (frontend scaffolding, ahead of the
+  Gateway).
+
+### [2026-07-20] Visual "app label" badge added to all three frontends - genuinely new work, not a retrofit
+- **Decision:** Added a small, fixed-position, non-functional visual
+  indicator distinguishing which architecture stage a given frontend is
+  talking to, to all three frontends at once (`frontend/`,
+  `frontend-baseline/`, `frontend-enhanced/`). Before building this, an
+  exhaustive search (`grep` across all three `src/` trees for "badge"/
+  "Monolith"/"Baseline Microservices", `git log --all`, `git stash
+  list`, and a byte-for-byte diff of both existing `App.jsx` files)
+  confirmed **no such feature existed anywhere in this codebase** -
+  despite having been proposed earlier in this project, it was never
+  actually implemented. This entry is that implementation, not a fix or
+  an update to prior work.
+  - **Design:** a fixed-position corner badge (bottom-right, `position:
+    fixed`, high `z-index`, `pointer-events: none`), not a strip above
+    `Navbar` - chosen specifically because it requires zero changes to
+    `Navbar.jsx`'s own layout/positioning in any of the three frontends
+    (a strip above `Navbar` would need `Navbar`'s `top-0` and the page
+    wrapper's `pt-20` adjusted to avoid overlap, in triplicate). Plain
+    inline CSS and text only, no images, no additional network
+    requests - deliberately inert with respect to every metric this
+    project measures (startup time, page weight, etc.).
+  - **One identical component (`src/components/AppBadge.jsx`), copied
+    verbatim into all three frontends** - reads `VITE_APP_LABEL`/
+    `VITE_APP_COLOR` from each frontend's own `.env`, so the only thing
+    that differs per frontend is two environment variable values, not
+    the code:
+    - `frontend/`: `"Monolithic Architecture"`, `#666666` (gray)
+    - `frontend-baseline/`: `"Baseline Microservices"`, `#4A86E8` (blue)
+    - `frontend-enhanced/`: `"Enhanced Microservices"`, `#2E7D32` (green)
+
+    Colors match the convention already used in this project's
+    architecture diagrams.
+  - Each frontend's `index.html` `<title>` updated to match
+    (`"BuildMart - <label>"`), so the browser tab itself is
+    distinguishable too, not just the in-page badge.
+- **Rationale:** With three near-identical frontends now existing
+  side-by-side (and, per Docker/local-dev workflows, potentially running
+  concurrently on different ports), a purely visual, zero-risk way to
+  tell at a glance which stage's frontend is currently open in the
+  browser has real value - especially now that `frontend-enhanced/`
+  exists per the entry directly above, and confusion between it and
+  `frontend-baseline/` is exactly the kind of mistake this guards
+  against.
+- **Verification:** started each of the three frontends in turn (not
+  concurrently) via `npm run dev`, confirmed via Playwright screenshot
+  that each shows its own correctly colored/labeled corner badge and
+  its own browser tab title, and confirmed `frontend-enhanced`
+  correctly talks to the running `build-mart-*` Docker containers from
+  the prior entry.
+- **Stage:** All three (Monolith, Baseline Microservices, Enhanced
+  Microservices) - purely visual, non-functional, does not affect any
+  measured metric.
+
+### [2026-07-22] Local Docker MongoDB seeded with the product catalog - a separate database that had simply never been seeded, not a bug
+- **Decision:** Ran `scripts/seed-products.js` against the local
+  Dockerized MongoDB (`mongodb://localhost:27017/product-service-db`,
+  the database the `build-mart-*` containers use) via a one-off
+  environment variable override at invocation
+  (`MONGO_URI="mongodb://localhost:27017/product-service-db" node
+  scripts/seed-products.js`), not by editing the real `.env`. `dotenv`
+  never overwrites an already-set `process.env` value, so the shell
+  prefix took precedence over both the script's own `dotenv.config()`
+  call and `backend/lib/db.js`'s - confirmed directly by the printed
+  `MongoDB connected: localhost` line, not just assumed from the
+  override logic.
+  - Discovered while debugging why `frontend-enhanced` showed "No
+    products found" on every category page (see the two entries
+    immediately above) - direct API checks against
+    `product-service:5001` showed `total: 0` for every category before
+    this, confirming the local Docker Mongo was simply never seeded,
+    a genuinely separate, independent database from every Atlas
+    database this project already uses (the Monolith's `buildmart` and
+    each service's own `<service>-service-db`) - not data loss, not a
+    bug, just a database that hadn't had this one-time step done yet.
+  - Atlas's own configuration and data were not touched by this in any
+    way - the override is invocation-scoped only, confirmed by
+    re-inspecting the real `.env` afterward (still points at
+    `cluster0.2cibdjn.mongodb.net/buildmart`, unchanged).
+  - This creates a **second, independent set of Cloudinary uploads**,
+    distinct from the ones already created against Atlas's databases -
+    expected and accepted, not a concern, since Cloudinary storage
+    isn't a constrained resource this project is tracking.
+- **Verification:** the script's own output confirmed `Created: 27,
+  Skipped: 0` with a per-category breakdown (cement/pipes/plank/rods/
+  roofing-sheet/wall-paints: 4 each, water-tank: 3 - 27 total, matching
+  the script's own documented distribution). Independently re-confirmed
+  via direct API calls against the running, already-verified
+  `product-service:5001` for all seven categories - each returned the
+  same count as the seed script reported, each with a real, freshly
+  uploaded Cloudinary image URL (`res.cloudinary.com/dnsq75g1h/...`),
+  not a placeholder.
+- **Stage:** Enhanced Microservices (local Docker dev infra - the same
+  seeding gap would equally have affected Baseline Microservices' own
+  local Docker run, had it been brought up against this database first;
+  recorded under Enhanced since that's the branch/session this was
+  found on).
+
+## [2026-07-22] WSL2's Redis was unreachable from Windows-side Node processes - a known localhost-bridging gap, resolved via Docker-hosted Redis instead
+
+- **Context:** running Baseline services as plain Node processes on
+  Windows (not containerized) requires a reachable Redis instance for
+  the Cart service. WSL2 has its own `redis-server`, which responded
+  correctly to `redis-cli ping` from inside WSL itself, but Windows-side
+  Node processes could not connect to it.
+- **Diagnosis:** `Test-NetConnection` from Windows against WSL2's Redis
+  port showed `TcpTestSucceeded: False`, confirming the port simply
+  wasn't reachable from the Windows side, despite Redis being up and
+  healthy inside WSL. This is a known WSL2 localhost-bridging gap (WSL2's
+  networking doesn't reliably forward every listening port back to
+  Windows `localhost` the way WSL1 or a native install would) - not a
+  Redis misconfiguration, not a wrong port/host, not a firewall rule.
+- **Resolution:** used the existing Docker container
+  (`build-mart-redis-1`) for Redis instead, since Docker Desktop's own
+  port mapping is reliably bridged to Windows `localhost` regardless of
+  the WSL2 gap. No code or config changes were needed beyond pointing
+  the plain-process services' `REDIS_URL`/`REDIS_HOST` at that
+  container's mapped port.
+- **Going forward:** for this development environment specifically,
+  plain-process Baseline (and Enhanced, where applicable) runs use
+  Docker-hosted Redis, while the other four services (user, product,
+  coupon, order) remain plain Node processes against Atlas Mongo. This
+  is a deliberate hybrid local-dev setup, not the final AWS deployment
+  architecture, and not a statement that Redis itself needs to be
+  containerized project-wide - it's specifically working around this
+  machine's WSL2 networking limitation.
+- **Stage:** Baseline Microservices (local dev environment note; applies
+  equally to any future plain-process Enhanced Microservices runs on
+  this same machine).
+
+## [2026-07-22] Redis-as-cache is not a genuine Baseline/Enhanced contrast point - reclassified, no code change
+
+- **Context:** while preparing Kubernetes manifests for Enhanced
+  Microservices, a request to "bring back" the featured-products Redis
+  cache in `services/product-service` (framed as something Baseline
+  deliberately lacks) surfaced a contradiction already on record in this
+  file:
+  - The **Product Service extracted** entry above (2026-07-16) confirms
+    `product.controller.js`'s Redis featured-products cache (`getFeaturedProducts`/
+    `updateFeaturedProductsCache`, 300s TTL) was copied in **verbatim**
+    at extraction time, and `services/product-service/.env.example`
+    documents `REDIS_URL` as existing specifically for this cache. It
+    was never removed.
+  - A separate, later 2026-07-16 entry (on the four-optimizations /
+    Comparison-B fairness discussion) lists "Redis-as-cache" alongside
+    Kubernetes/API-Gateway/CI-CD as an architectural variable meant to
+    distinguish Baseline from Enhanced - implying Baseline shouldn't
+    have it. That characterization was simply wrong; the code already
+    contradicted it on the same day it was written.
+- **Decision:** reclassify Redis-as-cache as **not** a Baseline/Enhanced
+  contrast point. Both stages have had the featured-products cache since
+  Product Service's original extraction, and `services/` is a single
+  shared directory across the `baseline-microservices` and
+  `enhanced-microservices` branches (unlike the frontends, which are
+  genuinely separate copies per stage) - so there was never a
+  code-level mechanism for this to differ between the two stages in the
+  first place. No code change was made to `services/product-service`.
+- **Consequence for Stage 3 Kubernetes prep:** the k8s manifests being
+  written for Enhanced Microservices (`k8s/product-service.yaml`, etc.)
+  inherit this cache automatically, same as every other consumer of
+  `services/product-service`'s existing container image - there is
+  nothing to "port" or "reintroduce" for Enhanced specifically. The
+  actual Enhanced-only architectural variables for Comparison B remain
+  Kubernetes orchestration, the API Gateway, and CI/CD - Redis-as-cache
+  is removed from that list.
+- **Stage:** Baseline Microservices and Enhanced Microservices (applies
+  identically to both, since it's the same shared code).
+
+## [2026-07-22] ECR repositories created; existing Baseline Docker images pushed as Enhanced Microservices' initial deployment artifacts
+
+- **Decision:** created five Amazon ECR repositories via the AWS CLI, one
+  per service, in `eu-west-3` (account `706059253443`):
+  `buildmart-product-service`, `buildmart-user-service`,
+  `buildmart-cart-service`, `buildmart-coupon-service`,
+  `buildmart-order-service` (`--image-scanning-configuration
+  scanOnPush=true`). Authenticated Docker to the registry via `aws ecr
+  get-login-password | docker login`, then tagged and pushed the
+  existing local images already proven during the Baseline
+  containerization work (`buildmart-<service>:latest`, built by
+  `docker compose -p build-mart build` - see the 2026-07-20
+  docker-compose entry above), not the `-sanity` or `sanity` tagged
+  variants also present locally from the earlier network-collision
+  investigation. No Dockerfile or build logic changes were made; this
+  reuses the already-verified images as-is.
+- **Registry URI:** `706059253443.dkr.ecr.eu-west-3.amazonaws.com`. Filled
+  into the `image:` field of all five `k8s/*-service.yaml` Deployments,
+  replacing the `<ECR_REGISTRY>` placeholder from the earlier Kubernetes
+  manifest prep. The CI/CD workflow file has not been written yet (no
+  `.github/workflows/` exists in this repo) - this registry URI will need
+  to be filled into that file too once it's created.
+- **Verification:** `aws ecr describe-images` confirmed all five
+  repositories now contain an image tagged `latest`, matching the digests
+  reported by each `docker push` (e.g. product-service
+  `sha256:349f40ad...`, matching local image ID `349f40add19f`).
+- **Stage:** Enhanced Microservices (ECR/EKS deployment infrastructure;
+  the images themselves are Baseline Microservices' images, reused
+  unchanged, consistent with the "same implementation, different
+  architecture" comparison design already on record in this file).
+
+## [2026-07-22] Cart Service's Redis moved to AWS ElastiCache, not an in-cluster pod
+
+- **Problem:** `k8s/cart-service-secret.yaml`'s `REDIS_URL` was still the
+  local-dev placeholder (`redis://localhost:6379`), which has no meaning
+  inside a Kubernetes pod - there is no Redis process running alongside
+  it in the same network namespace. This needed a real, reachable Redis
+  endpoint before cart-service could actually start on EKS.
+- **Decision:** provisioned **AWS ElastiCache for Redis**
+  (`cache.t3.micro`, single node, cluster mode disabled) rather than
+  deploying Redis as an in-cluster pod (e.g. via a Deployment + PVC, or
+  the Bitnami/official Redis Helm chart). A managed cache service is
+  more representative of how this architecture would actually be run in
+  production, and fits this dissertation's framing of Enhanced
+  Microservices as the cloud-native, managed-services stage relative to
+  Baseline's self-hosted Docker Redis - the Redis Deployment/PVC route
+  was available but rejected specifically because it would have made
+  Enhanced's "infrastructure" indistinguishable from Baseline's, other
+  than orchestration.
+- **Infrastructure created:**
+  - ElastiCache subnet group `buildmart-redis-subnet-group`, using the
+    same 6 subnets as the EKS cluster.
+  - A dedicated security group, `sg-010ad27e9c7350a1b`, scoped to this
+    Redis cluster only (not shared with any other resource).
+  - Cluster ID `buildmart-redis`; endpoint
+    `buildmart-redis.fhofw6.0001.euw3.cache.amazonaws.com:6379`.
+- **Debugging note:** the first ingress rule on
+  `sg-010ad27e9c7350a1b` authorized traffic from the **EKS
+  control-plane security group** rather than the actual **worker node**
+  security group (`eks-cluster-sg-buildmart-enhanced-1165427489` /
+  `sg-082af3989363c59a3`) - pod traffic to ElastiCache comes from node
+  ENIs, not the control plane, so this rule looked correct but never
+  actually matched traffic, producing `ETIMEDOUT` despite a rule
+  "existing." Fixed by re-authorizing ingress on port 6379 from the
+  correct node security group. A leftover self-referencing rule
+  (`sg-010ad27e9c7350a1b` → itself, created by mistake while chasing this)
+  was also removed - see the entry immediately below.
+- **NAT Gateway:** confirmed **no NAT Gateway is required** for this -
+  ElastiCache traffic between the worker nodes and the cache cluster
+  stays entirely within the VPC and never needs outbound internet
+  access. This project runs without a NAT Gateway as a cost-optimization
+  choice; this is the first decision-log entry to record that
+  explicitly, prompted by checking it wasn't a hidden requirement here.
+- **Verification:** confirmed connectivity two ways - `redis-cli PING`
+  from a temporary throwaway pod against the ElastiCache endpoint
+  (`PONG`), and a direct `ioredis` connection test executed inside the
+  actual running cart-service pod. After a rollout restart, cart-service
+  pod logs show a clean startup with no Redis connection errors.
+- **Stage:** Enhanced Microservices.
+
+## [2026-07-22] External access architecture: HTTP API Gateway + VPC Link + single internal NLB, not an ALB/Ingress or per-service Load Balancers
+
+- **Requirement:** all five services are ClusterIP-only (see the
+  Kubernetes manifests already on record) and need to be reachable from
+  outside the cluster through an HTTP API Gateway with path-based
+  routing, without provisioning a public-facing `LoadBalancer` Service
+  directly, and within a tight (~$10/month) budget for this piece of
+  infrastructure.
+- **Options considered:**
+  1. **AWS Load Balancer Controller + Ingress** (path-based routing via
+     an ALB) - rejected. Requires standing up an IAM OIDC identity
+     provider for the cluster, creating a dedicated IAM policy/role for
+     the controller, and a Helm install of the controller itself before
+     a single route works. That's a meaningful chunk of setup and
+     failure surface (OIDC trust misconfiguration, IAM policy drift,
+     Helm chart version mismatches) to take on this close to the project
+     deadline, for a routing capability the HTTP API Gateway can already
+     provide on its own.
+  2. **One NLB per service** (5 total, one per port) - rejected on cost:
+     roughly $16-20/month per NLB, so 5x that comfortably blows past the
+     ~$10 budget for this piece alone.
+  3. **Single internal NLB with 5 listeners (one per service port) +
+     NodePort Services, with the HTTP API Gateway doing path-based
+     routing at the Gateway layer** - **selected**. Each service is
+     switched from `ClusterIP` to `NodePort` (a fixed node port per
+     service), the single internal NLB gets one listener per port
+     forwarding to the matching NodePort, and the HTTP API Gateway's own
+     route-to-integration mapping (e.g. `/api/products/*` →
+     product-service's NLB listener, `/api/cart/*` → cart-service's,
+     etc.) handles the path-based routing that would otherwise require
+     an ALB or an Ingress controller.
+- **Rationale:** this avoids the Load Balancer Controller / Helm / OIDC
+  setup entirely, keeps cost to a single NLB rather than five, and
+  reuses HTTP API Gateway's native routing (already the plan for the
+  Gateway itself) instead of introducing a second routing layer to do
+  the same job.
+- **Important clarification for the record:** switching a Service from
+  `ClusterIP` to `NodePort` does **not**, by itself, expose it to the
+  public internet. A NodePort only opens a port on each EKS worker
+  node's network interface, reachable from within the VPC - it has no
+  public route of its own. External reachability here comes entirely
+  from the chain HTTP API Gateway → VPC Link → internal NLB → NodePort;
+  removing any one of those three still leaves the NodePort itself
+  unreachable from outside the VPC.
+- **Stage:** Enhanced Microservices.
+
+## [2026-07-23] Temporary CORS configuration: all five services' CLIENT_URL set to Baseline's localhost value
+
+- **Decision:** all five services' `CLIENT_URL` environment variable was
+  set to `http://localhost:5173`, matching the value already used in
+  Baseline Microservices, as a deliberate temporary stopgap. `CLIENT_URL`
+  is a plain `env:` entry on each Deployment (see `k8s/*-service.yaml`),
+  not a Kubernetes Secret key - it was never included in the Secret
+  structure proposed earlier in this file, since it isn't sensitive.
+- **This is not the final value.** It will be replaced with
+  `frontend-enhanced`'s real deployment URL once that frontend is
+  actually deployed and its URL is known. Until then, a browser client
+  calling these services from anywhere other than `localhost:5173` will
+  be rejected by CORS, same as Baseline's current behaviour.
+- **Action item:** once `frontend-enhanced` has a real URL, patch
+  `CLIENT_URL` in all five service Deployments (via `kubectl patch`,
+  same method used for the NodePort and REDIS_URL changes above) and
+  restart all five Deployments to pick up the change. The tracked
+  `k8s/*-service.yaml` manifests should be updated to match at the same
+  time, as was done here.
+- **Stage:** Enhanced Microservices.
+
+## [2026-07-23] PLANNED: WebPageTest for frontend-enhanced's global load performance (not yet executed)
+
+- **Plan:** use WebPageTest (free, tests from ~40+ global locations) to
+  measure `frontend-enhanced`'s load performance once it's hosted on
+  S3 + CloudFront, from multiple geographic locations (e.g. US East,
+  Europe, Asia, South America, Africa).
+- **Rationale:** CloudFront's CDN edge caching is expected to reduce
+  latency for geographically distant users compared to Baseline's
+  single-region EC2 hosting, but this needs to be **measured, not
+  assumed**. WebPageTest gives real browser-rendering metrics (Time to
+  First Byte, full load waterfall) from actual global vantage points,
+  without requiring paid tooling or additional AWS setup.
+- **Honesty note for the eventual write-up:** since testing will be run
+  from a single operator location (not real distributed user traffic),
+  results should be framed as "CDN architecture reduces latency for
+  geographically distant requests" rather than overstated claims about
+  real-world global user experience at scale.
+- **Alternatives considered:** k6 Cloud - rejected for this specific
+  test, since multi-region runs are a paid feature beyond a limited
+  trial. AWS CloudShell `curl` timing from multiple regions - rejected
+  as the primary method, since it measures raw HTTP timing only, not
+  full browser load experience, though it could serve as a supplementary
+  data point alongside WebPageTest.
+- **Status:** PLANNED, not yet executed - to be run once
+  `frontend-enhanced` is deployed to CloudFront and, ideally, once
+  Baseline's EC2 frontend is also live, for a genuine side-by-side
+  comparison.
+- **Stage:** Enhanced Microservices (frontend performance evaluation,
+  feeds into Chapter 4.7.3.4 Performance Evaluation).
+
+## [2026-07-23] PLANNED: k6 load tests run from an in-region EC2 instance, not a local connection
+
+- **Context:** while manually testing the deployed system, a single
+  `curl` request to the API Gateway timed out while every other check
+  (the same Gateway seconds later, CloudFront, general internet
+  connectivity) succeeded normally. Diagnosed as a transient local
+  network blip (residential Wi-Fi/ISP), not an infrastructure issue -
+  immediate retries and every other endpoint worked fine, which rules
+  out the Gateway, CloudFront, or the cluster as the cause.
+- **Decision:** for k6 load testing and startup-time benchmarking across
+  Monolith, Baseline, and Enhanced, tests will be run from an **EC2
+  instance within `eu-west-3`** (the same region as the infrastructure
+  being tested), rather than from a local residential connection.
+- **Rationale:** this removes the tester's home internet/ISP as an
+  uncontrolled variable from the measurements, so results reflect the
+  actual infrastructure's performance rather than being occasionally
+  skewed by unrelated local network hiccups - more methodologically
+  sound for a cloud architecture performance comparison than testing
+  from wherever the researcher happens to be sitting.
+- **Additional methodology safeguards to apply during actual benchmark
+  runs:**
+  - Run each load test 2-3 times, not once, and report the consistent
+    pattern rather than a single data point.
+  - Use a brief warm-up period before the measured run, to rule out
+    cold-start effects (DNS resolution, TCP handshake) skewing results.
+  - Any anomalous single-run result should be flagged and excluded with
+    justification, not silently included, if it's inconsistent with
+    repeated runs.
+- **Status:** PLANNED - to be implemented when the k6/load testing phase
+  begins, after Monolith and Baseline EC2 deployments exist.
+- **Stage:** cross-cutting (applies to all three architectures'
+  performance evaluation, feeds into Chapter 4.7.3.4 Performance
+  Evaluation).
