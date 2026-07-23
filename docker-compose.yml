@@ -15,6 +15,75 @@ services:
     volumes:
       - redis_data:/data
 
+  product-service:
+    build: ./services/product-service
+    restart: unless-stopped
+    env_file: ./services/product-service/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/product-service-db
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "5001:5001"
+    depends_on:
+      - mongo
+      - redis
+
+  user-service:
+    build: ./services/user-service
+    restart: unless-stopped
+    env_file: ./services/user-service/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/user-service-db
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "5002:5002"
+    depends_on:
+      - mongo
+      - redis
+
+  cart-service:
+    build: ./services/cart-service
+    restart: unless-stopped
+    env_file: ./services/cart-service/.env
+    environment:
+      REDIS_URL: redis://redis:6379
+      PRODUCT_SERVICE_URL: http://product-service:5001
+    ports:
+      - "5003:5003"
+    depends_on:
+      - redis
+      - product-service
+
+  coupon-service:
+    build: ./services/coupon-service
+    restart: unless-stopped
+    env_file: ./services/coupon-service/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/coupon-service-db
+    ports:
+      - "5004:5004"
+    depends_on:
+      - mongo
+
+  order-service:
+    build: ./services/order-service
+    restart: unless-stopped
+    env_file: ./services/order-service/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/order-service-db
+      CART_SERVICE_URL: http://cart-service:5003
+      COUPON_SERVICE_URL: http://coupon-service:5004
+      PRODUCT_SERVICE_URL: http://product-service:5001
+      USER_SERVICE_URL: http://user-service:5002
+    ports:
+      - "5005:5005"
+    depends_on:
+      - mongo
+      - cart-service
+      - coupon-service
+      - product-service
+      - user-service
+
 volumes:
   mongo_data:
   redis_data:

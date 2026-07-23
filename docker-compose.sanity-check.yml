@@ -1,0 +1,92 @@
+# TEMPORARY, local-only sanity check that the five Dockerized Baseline
+# Microservices can actually reach each other over Docker's own network
+# before Stage 3 (Enhanced Microservices) EKS work begins. Not meant to
+# become permanent infrastructure and not reused for the Enhanced
+# deployment - Kubernetes uses its own, separate service-discovery
+# mechanism, set up independently. See docs/decision_log.md.
+#
+# Deliberately kept apart from the existing docker-compose.yml (local
+# Mongo+Redis dev infra) rather than merging into it, so this file can be
+# spun up/torn down without touching that one or its `build-mart-redis-1`
+# container. MongoDB is NOT included here - all five services connect to
+# the same external Atlas cluster as normal local dev, via each service's
+# real .env (MONGO_URI is not overridden below).
+#
+# IMPORTANT: Compose derives its project name from the current directory
+# by default, NOT from the -f filename. The root docker-compose.yml (local
+# Mongo+Redis dev infra) has a service literally named "redis" - if this
+# file also used that exact service key without an explicit distinct
+# project name, Compose would treat the two as the SAME service under the
+# SAME default "build-mart" project and recreate/replace the real one
+# (this happened once during development of this file; the original
+# container and its data were recovered, see docs/decision_log.md). To
+# make that structurally impossible, always pass an explicit, different
+# project name with -p:
+#
+# Run:   docker compose -p buildmart-sanity -f docker-compose.sanity-check.yml up -d --build
+# Tear down (safe to use -v - this project's redis has no shared volume):
+#        docker compose -p buildmart-sanity -f docker-compose.sanity-check.yml down -v
+
+services:
+  sanity-redis:
+    image: redis:7-alpine
+    container_name: sanity-redis
+
+  product-service:
+    build: ./services/product-service
+    container_name: sanity-product-service
+    env_file: ./services/product-service/.env
+    environment:
+      REDIS_URL: redis://sanity-redis:6379
+    ports:
+      - "15001:5001"
+    depends_on:
+      - sanity-redis
+
+  user-service:
+    build: ./services/user-service
+    container_name: sanity-user-service
+    env_file: ./services/user-service/.env
+    environment:
+      REDIS_URL: redis://sanity-redis:6379
+    ports:
+      - "15002:5002"
+    depends_on:
+      - sanity-redis
+
+  cart-service:
+    build: ./services/cart-service
+    container_name: sanity-cart-service
+    env_file: ./services/cart-service/.env
+    environment:
+      REDIS_URL: redis://sanity-redis:6379
+      PRODUCT_SERVICE_URL: http://product-service:5001
+    ports:
+      - "15003:5003"
+    depends_on:
+      - sanity-redis
+      - product-service
+
+  coupon-service:
+    build: ./services/coupon-service
+    container_name: sanity-coupon-service
+    env_file: ./services/coupon-service/.env
+    ports:
+      - "15004:5004"
+
+  order-service:
+    build: ./services/order-service
+    container_name: sanity-order-service
+    env_file: ./services/order-service/.env
+    environment:
+      CART_SERVICE_URL: http://cart-service:5003
+      COUPON_SERVICE_URL: http://coupon-service:5004
+      PRODUCT_SERVICE_URL: http://product-service:5001
+      USER_SERVICE_URL: http://user-service:5002
+    ports:
+      - "15005:5005"
+    depends_on:
+      - cart-service
+      - coupon-service
+      - product-service
+      - user-service
