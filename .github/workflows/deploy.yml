@@ -1,0 +1,91 @@
+name: Deploy Enhanced Microservices
+
+on:
+  push:
+    branches:
+      - enhanced-microservices
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REGISTRY: 706059253443.dkr.ecr.eu-west-3.amazonaws.com
+  EKS_CLUSTER: buildmart-enhanced
+  NAMESPACE: buildmart
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push user-service
+        run: |
+          docker build -t $ECR_REGISTRY/buildmart-user-service:latest services/user-service
+          docker push $ECR_REGISTRY/buildmart-user-service:latest
+
+      - name: Build & push product-service
+        run: |
+          docker build -t $ECR_REGISTRY/buildmart-product-service:latest services/product-service
+          docker push $ECR_REGISTRY/buildmart-product-service:latest
+
+      - name: Build & push cart-service
+        run: |
+          docker build -t $ECR_REGISTRY/buildmart-cart-service:latest services/cart-service
+          docker push $ECR_REGISTRY/buildmart-cart-service:latest
+
+      - name: Build & push coupon-service
+        run: |
+          docker build -t $ECR_REGISTRY/buildmart-coupon-service:latest services/coupon-service
+          docker push $ECR_REGISTRY/buildmart-coupon-service:latest
+
+      - name: Build & push order-service
+        run: |
+          docker build -t $ECR_REGISTRY/buildmart-order-service:latest services/order-service
+          docker push $ECR_REGISTRY/buildmart-order-service:latest
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Update kubeconfig for buildmart-enhanced
+        run: aws eks update-kubeconfig --name $EKS_CLUSTER --region $AWS_REGION
+
+      - name: Restart rollout - user-service
+        run: kubectl rollout restart deployment/user-service -n $NAMESPACE
+
+      - name: Restart rollout - product-service
+        run: kubectl rollout restart deployment/product-service -n $NAMESPACE
+
+      - name: Restart rollout - cart-service
+        run: kubectl rollout restart deployment/cart-service -n $NAMESPACE
+
+      - name: Restart rollout - coupon-service
+        run: kubectl rollout restart deployment/coupon-service -n $NAMESPACE
+
+      - name: Restart rollout - order-service
+        run: kubectl rollout restart deployment/order-service -n $NAMESPACE
+
+      - name: Wait for rollout - user-service
+        run: kubectl rollout status deployment/user-service -n $NAMESPACE --timeout=180s
+
+      - name: Wait for rollout - product-service
+        run: kubectl rollout status deployment/product-service -n $NAMESPACE --timeout=180s
+
+      - name: Wait for rollout - cart-service
+        run: kubectl rollout status deployment/cart-service -n $NAMESPACE --timeout=180s
+
+      - name: Wait for rollout - coupon-service
+        run: kubectl rollout status deployment/coupon-service -n $NAMESPACE --timeout=180s
+
+      - name: Wait for rollout - order-service
+        run: kubectl rollout status deployment/order-service -n $NAMESPACE --timeout=180s
