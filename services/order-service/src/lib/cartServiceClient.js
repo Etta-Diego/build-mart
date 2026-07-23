@@ -14,9 +14,10 @@ const REQUEST_TIMEOUT_MS = 5000;
 export class CartServiceUnavailableError extends Error {}
 
 // Token-forwarded - Cart Service's own auth.middleware.js expects a real
-// end-user access token cookie, same as if the user had called it
-// directly. Clears the user's entire cart (no productId), replacing the
-// monolith's User.findByIdAndUpdate(userId, { cartItems: [] }).
+// end-user access token as an Authorization: Bearer header, same as if
+// the user had called it directly. Clears the user's entire cart (no
+// productId), replacing the monolith's
+// User.findByIdAndUpdate(userId, { cartItems: [] }).
 export async function clearCart(accessToken) {
 	const baseUrl = process.env.CART_SERVICE_URL || "http://localhost:5003";
 	const controller = new AbortController();
@@ -28,7 +29,7 @@ export async function clearCart(accessToken) {
 			method: "DELETE",
 			headers: {
 				"Content-Type": "application/json",
-				Cookie: `accessToken=${accessToken}`,
+				Authorization: `Bearer ${accessToken}`,
 			},
 			body: JSON.stringify({}),
 			signal: controller.signal,

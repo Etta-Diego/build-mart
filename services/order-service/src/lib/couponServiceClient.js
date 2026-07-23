@@ -35,7 +35,7 @@ async function fetchWithTimeout(url, options) {
 export async function validateCoupon(accessToken, code) {
 	const response = await fetchWithTimeout(`${couponServiceBaseUrl()}/api/coupons/validate`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json", Cookie: `accessToken=${accessToken}` },
+		headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
 		body: JSON.stringify({ code }),
 	});
 
@@ -54,7 +54,7 @@ export async function validateCoupon(accessToken, code) {
 export async function createCoupon(accessToken) {
 	const response = await fetchWithTimeout(`${couponServiceBaseUrl()}/api/coupons`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json", Cookie: `accessToken=${accessToken}` },
+		headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
 	});
 
 	if (!response.ok) {

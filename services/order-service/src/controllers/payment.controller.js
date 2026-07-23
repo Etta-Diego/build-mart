@@ -20,7 +20,7 @@ export const createCheckoutSession = async (req, res) => {
 			return res.status(400).json({ error: "Invalid or empty products array" });
 		}
 
-		const accessToken = req.cookies.accessToken;
+		const accessToken = req.headers.authorization.split(" ")[1];
 
 		let totalAmount = 0;
 
@@ -135,7 +135,7 @@ export const checkoutSuccess = async (req, res) => {
 			// is the one step that must never be lost.
 			const newOrder = await createOrder(session);
 
-			const accessToken = req.cookies.accessToken;
+			const accessToken = req.headers.authorization.split(" ")[1];
 
 			if (session.metadata.couponCode) {
 				try {
