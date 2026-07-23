@@ -20,11 +20,13 @@ import jwt from "jsonwebtoken";
 // rationale.
 export const protectRoute = (req, res, next) => {
 	try {
-		const accessToken = req.cookies.accessToken;
+		const authHeader = req.headers.authorization;
 
-		if (!accessToken) {
+		if (!authHeader || !authHeader.startsWith("Bearer ")) {
 			return res.status(401).json({ message: "Unauthorized - No access token provided" });
 		}
+
+		const accessToken = authHeader.split(" ")[1];
 
 		try {
 			const decoded = jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET);
