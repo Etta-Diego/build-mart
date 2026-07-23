@@ -1,0 +1,31 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: buildmart-enhanced
+  region: eu-west-3
+  version: "1.32"
+
+vpc:
+  nat:
+    gateway: Disable
+
+managedNodeGroups:
+  - name: buildmart-workers
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 5
+    volumeSize: 20
+    privateNetworking: false
+    ssh:
+      allow: false
+    labels:
+      role: buildmart-service
+    tags:
+      project: buildmart-dissertation
+      stage: enhanced-microservices
+
+cloudWatch:
+  clusterLogging:
+    enableTypes: []

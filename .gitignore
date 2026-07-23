@@ -14,6 +14,21 @@ dist-ssr
 
 .env
 
+# Contain real credentials (Mongo URI, JWT/internal-service secrets,
+# Cloudinary, Stripe) filled in locally - same reasoning as .env above.
+# The rest of k8s/ (Deployments, Services, HPA) stays tracked.
+k8s/*-secret.yaml
+
+# Claude Code local tool config - not shared project config.
+.claude/
+
+# One-off local deployment scratch files: contain the real AWS account ID
+# and resource ARNs, and aren't needed by other developers - the "why"
+# behind each is documented in docs/decision_log.md instead.
+frontend-enhanced/bucket-policy.json
+frontend-enhanced/cloudfront-config.json
+eks-describe-policy.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

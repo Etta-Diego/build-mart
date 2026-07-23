@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.auth-field:-webkit-autofill,
+.auth-field:-webkit-autofill:hover,
+.auth-field:-webkit-autofill:focus {
+	-webkit-text-fill-color: theme("colors.gray.900");
+	-webkit-box-shadow: 0 0 0 1000px theme("colors.gray.100") inset;
+	transition: background-color 5000s ease-in-out 0s;
+}
+
+.dark .auth-field:-webkit-autofill,
+.dark .auth-field:-webkit-autofill:hover,
+.dark .auth-field:-webkit-autofill:focus {
+	-webkit-text-fill-color: theme("colors.white");
+	-webkit-box-shadow: 0 0 0 1000px theme("colors.gray.700") inset;
+}

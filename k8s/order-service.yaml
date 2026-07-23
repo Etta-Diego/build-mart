@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: buildmart
+  labels:
+    app: order-service
+    app.kubernetes.io/part-of: buildmart
+    stage: enhanced-microservices
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+        app.kubernetes.io/part-of: buildmart
+        stage: enhanced-microservices
+    spec:
+      containers:
+        - name: order-service
+          # ECR registry: 706059253443.dkr.ecr.eu-west-3.amazonaws.com
+          # (see docs/DECISION_LOG.md for creation/push details).
+          image: "706059253443.dkr.ecr.eu-west-3.amazonaws.com/buildmart-order-service:latest"
+          ports:
+            - name: http
+              containerPort: 5005
+          env:
+            - name: PORT
+              value: "5005"
+            # Temporary stopgap - matches Baseline's value; will be
+            # replaced with frontend-enhanced's real deployment URL once
+            # known. See docs/DECISION_LOG.md.
+            - name: CLIENT_URL
+              value: "http://localhost:5173"
+            # In-cluster Service DNS names - resolve via k8s' internal DNS
+            # once the corresponding manifests are applied to this namespace.
+            - name: CART_SERVICE_URL
+              value: "http://cart-service:5003"
+            - name: COUPON_SERVICE_URL
+              value: "http://coupon-service:5004"
+            - name: PRODUCT_SERVICE_URL
+              value: "http://product-service:5001"
+            - name: USER_SERVICE_URL
+              value: "http://user-service:5002"
+          envFrom:
+            - secretRef:
+                name: order-service-secrets
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: buildmart
+  labels:
+    app: order-service
+    app.kubernetes.io/part-of: buildmart
+spec:
+  type: NodePort
+  selector:
+    app: order-service
+  ports:
+    - name: http
+      port: 5005
+      targetPort: http
+      nodePort: 30005
