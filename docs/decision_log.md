@@ -2811,3 +2811,30 @@ Written for direct reuse in the dissertation's methodology chapter.
   workaround explicitly anticipated in this file's earlier entry
   documenting the cookie-scoping limitation.
 - **Stage:** Baseline Microservices.
+
+### [2026-07-24] EC2 vCPU quota increase requested after VcpuLimitExceeded launching frontend-baseline's 6th instance
+- **Decision/Context:** Submitted an AWS Service Quotas increase
+  request for the "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z)
+  instances" vCPU quota in `eu-west-3`, from 16 to 32, after hitting
+  `VcpuLimitExceeded` while trying to launch a 6th EC2 instance to host
+  frontend-baseline. Current running instances (EKS worker nodes, the
+  Monolith's single EC2 instance, and all 5 Baseline Microservices
+  instances) already consume the account's full 16 vCPU limit in this
+  region, leaving no headroom for the new instance.
+- **Request details:** Request ID
+  `6118c86adafb40e4beb56ba58137ba28Yst3anES`, submitted 2026-07-24.
+  Free and asynchronous - no cost to request, pending AWS approval, no
+  fixed SLA on turnaround.
+- **Rationale:** Same category of quota wall as the cart-service
+  Elastic IP limit hit earlier in this stage's setup - an AWS
+  account-level default quota, not an architectural constraint, blocking
+  further deployment. Requesting an increase (rather than stopping/
+  terminating an existing instance to free vCPUs) preserves all 7
+  already-running instances (5 Baseline services, Monolith, EKS nodes)
+  exactly as deployed, avoiding any disruption to in-progress or
+  completed work across all three stages.
+- **Action item:** Deploy frontend-baseline's 6th EC2 instance once this
+  quota increase is approved. Check request status via `aws
+  service-quotas get-requested-service-quota-change` before attempting
+  the launch again.
+- **Stage:** Baseline Microservices.
