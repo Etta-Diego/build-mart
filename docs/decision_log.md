@@ -3260,3 +3260,252 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** cross-cutting (applies to all three architectures'
   performance evaluation, feeds into Chapter 4.7.3.4 Performance
   Evaluation).
+
+## [2026-07-23] Monolith deployed to EC2 (v1.4-monolith-baseline); four deployment bugs found and fixed
+
+- **Decision:** deployed the `v1.4-monolith-baseline` tag to a dedicated
+  EC2 instance (`t3.small`, Ubuntu 22.04) in its own separate VPC
+  (`buildmart-monolith-vpc`, `10.1.0.0/16`), isolated from Enhanced's
+  VPC, so each architecture's networking stays independent for a clean
+  teardown/redeploy between the upcoming faculty and final defenses.
+  - **Stack:** Node.js 20, `pm2` as process manager, Redis installed
+    locally on the instance (not ElastiCache - this VPC has no path to
+    Enhanced's ElastiCache instance without VPC peering, and a local
+    Redis is simpler and matches the Monolith's self-contained
+    architecture narrative better than reaching across VPCs anyway).
+    MongoDB Atlas, with a dedicated `monolith-db` database on the same
+    cluster as every microservice's own `<service>-service-db`.
+  - An Elastic IP was allocated for a stable public address; the
+    security group is scoped to SSH (restricted to the operator's IP),
+    HTTP, and port 5000.
+- **Bug 1 - cookie authentication failing (401 immediately after
+  login):** `secure: process.env.NODE_ENV === "production"` correctly
+  evaluated to `true` (`NODE_ENV=production` was set), but the instance
+  serves plain HTTP with no TLS configured, so browsers silently refused
+  to store `Secure` cookies over an insecure connection. Fixed by
+  setting `secure: false` across all three cookie-setting blocks in
+  `auth.controller.js`, with an inline comment marking this as a
+  deliberate exception for this HTTP-only demo/benchmarking environment,
+  not a production security posture.
+- **Bug 2 - frontend static file serving 404 on every route** despite a
+  valid `frontend/dist/` build existing: `server.js`'s
+  `express.static()` and catch-all route are gated behind
+  `if (process.env.NODE_ENV === "production")`, which wasn't set in
+  `.env` on this fresh instance. Fixed by adding `NODE_ENV=production`.
+- **Bug 3 - Stripe.js failed to initialize**
+  (`IntegrationError: Missing value for Stripe(): apiKey should be a
+  string`): `frontend/.env` (containing `VITE_STRIPE_PUBLISHABLE_KEY`)
+  didn't exist on this fresh clone, and Vite bakes env vars in at build
+  time, not runtime. Fixed by creating `frontend/.env` with the
+  publishable key and rebuilding.
+- **Bug 4 - Stripe checkout success/cancel redirects failed with
+  `ERR_CONNECTION_REFUSED`:** `CLIENT_URL` in `.env` was set to
+  `http://13.38.201.124` with no port, but nothing listens on port 80 on
+  this instance (no reverse proxy configured). Fixed by correcting
+  `CLIENT_URL` to include `:5000`.
+- **Verification:** full purchase flow confirmed working end-to-end -
+  login, product browsing (seeded via the existing
+  `scripts/seed-products.js`, the same product catalog used throughout
+  this project, for consistent cross-architecture benchmarking), cart,
+  the $200+ coupon reward system (a `GIFT` coupon auto-generated and
+  successfully applied at checkout), Stripe test-mode payment, the
+  purchase success page, and admin role/panel access (role promoted
+  directly via a MongoDB update, since this codebase has no admin
+  signup flow).
+- **Stage:** Monolith (EC2 deployment infrastructure; the four bugs
+  above are deployment/environment issues specific to a fresh HTTP-only
+  EC2 instance, not defects in the `v1.4-monolith-baseline` code itself).
+
+## [2026-07-23] Baseline's cart-service running on an ephemeral public IP, not a static Elastic IP - quota increase pending
+
+- **Context:** while tagging and assigning Elastic IPs to Baseline
+  Microservices' five EC2 instances (product/user/cart/coupon/order,
+  one per service, in `eu-west-3`), the account's EC2-VPC Elastic IP
+  quota (5, the AWS default) was exhausted after allocating 4 of the 5
+  needed - the Monolith's own EC2 instance (see the deployment entry
+  above) already held one of the five, leaving no headroom for the
+  fifth Baseline service.
+- **Current state:** product-service, user-service, coupon-service, and
+  order-service each have a proper static Elastic IP. **cart-service is
+  running on an auto-assigned ephemeral public IP (`13.37.226.159`)**
+  instead - reachable right now, but this address is **not stable** and
+  will change if the instance is stopped and restarted.
+- **Decision:** requested a quota increase to 10 rather than releasing
+  the Monolith's existing EIP or leaving cart-service permanently
+  IP-less - keeps every architecture's EC2 footprint independent, with
+  headroom for whichever stage needs a EIP next. Submitted via
+  `aws service-quotas request-service-quota-increase` (quota code
+  `L-0263D0A3`, verified against `list-service-quotas` before
+  submitting), **request ID `18f97487beb9452dae60babb003aac0frhE5kiOa`**,
+  submitted 2026-07-23, status PENDING at time of writing.
+- **Action item:** once the quota increase is approved, allocate and
+  associate a proper Elastic IP for cart-service, replacing the
+  ephemeral one. This matters specifically because the plan is to
+  stop/redeploy all three architectures between now and the faculty and
+  final defenses - an ephemeral IP that changes on every restart would
+  silently break anything pointing at cart-service's current address
+  (e.g. `CART_SERVICE_URL` in Order Service's config) between now and
+  then.
+- **Stage:** Baseline Microservices (EC2 deployment infrastructure).
+
+## [2026-07-23] Baseline Microservices deployed across 5 separate EC2 instances, one per service - .env topology decisions
+
+- **Decision:** each of the five Baseline services (product/user/cart/
+  coupon/order) runs on its own dedicated EC2 instance (`t3.micro`),
+  rather than sharing a single host the way `docker-compose.yml`'s local
+  dev stack does. Each instance runs its own local `redis-server`
+  (installed and enabled during the earlier environment setup) and each
+  Mongo-backed service connects to its own dedicated Atlas database
+  (`baseline-<service>-service-db`, on the same cluster as every other
+  stage's databases in this project).
+- **Redis topology - intentional change, not a regression:** the
+  `.env.example` files' comments describe a single shared physical
+  Redis instance (Product Service's `featured_products` cache, User
+  Service's refresh tokens, and Cart Service's cart hashes, isolated
+  only by key prefix - see the Cart-as-Redis-Hash entry above). Since
+  each service now runs on a physically separate EC2 instance, each gets
+  its **own separate local Redis** instead - there is no shared Redis to
+  point at anymore. This is arguably **more correct microservices
+  isolation** than the original local-dev design (no cross-service key-
+  prefix collision risk, no single Redis instance as a shared point of
+  failure across three services), not a loss of functionality. Recorded
+  here explicitly so this divergence from the `.env.example` comments
+  isn't later mistaken for a deployment bug.
+- **Cross-service URLs use real Elastic IPs, not `localhost`:**
+  `PRODUCT_SERVICE_URL`, `CART_SERVICE_URL`, `COUPON_SERVICE_URL`, and
+  `USER_SERVICE_URL` each point at the relevant instance's real public
+  Elastic IP and port (e.g. Cart Service's `PRODUCT_SERVICE_URL=
+  http://15.188.19.182:5001`), since these services are now on
+  physically separate machines rather than one shared host or Docker
+  network.
+- **`CLIENT_URL` set to `http://localhost:5173`** across all five
+  services, as a temporary stopgap - `frontend-baseline` has no
+  deployment URL yet. Same pattern as Enhanced Microservices' own
+  `CLIENT_URL` stopgap earlier this session. **Action item:** update all
+  five once `frontend-baseline` has a real deployment URL.
+- **Shared secrets** (`ACCESS_TOKEN_SECRET`, `REFRESH_TOKEN_SECRET`,
+  `INTERNAL_SERVICE_KEY`) are kept byte-identical across all five
+  services' `.env` files, as required for stateless JWT verification and
+  the shared-secret-gated service-to-service calls - consistent with
+  every other stage's auth design already on record in this file.
+- **Action item:** `order-service`'s `STRIPE_SECRET_KEY` is still the
+  `sk_test_replace-me` placeholder - pending manual completion directly
+  on the instance, not pasted through chat.
+- **Stage:** Baseline Microservices (EC2 deployment infrastructure).
+
+## [2026-07-23] All 5 Baseline services started via pm2 - clean startup confirmed across the board
+
+- **Decision/note:** starting each service required running
+  `npm ci --omit=dev` first, on every one of the five instances -
+  `node_modules` didn't exist yet, since the earlier environment setup
+  only did `git clone` + `git checkout baseline-microservices`, with no
+  dependency install step. Worth recording explicitly for anyone
+  following this deployment process later, since it's an easy step to
+  forget between "clone the repo" and "start the service."
+- **Verification:** all five started cleanly via
+  `pm2 start src/server.js --name <service>`, confirmed `online` in
+  `pm2` status, with clean logs and no errors:
+  - product-service, user-service, coupon-service, order-service each
+    logged `MongoDB connected: ...` against their respective Atlas
+    shard, as expected.
+  - cart-service logged no MongoDB connection line - expected and
+    correct, since Cart Service is Redis-only by design (see the
+    Cart-as-Redis-Hash entry above), not a missing/failed connection.
+- **Action item:** `order-service`'s `STRIPE_SECRET_KEY` still needs
+  verification via an actual checkout test - clean pm2 startup alone
+  doesn't exercise this value, since it's only read when a checkout is
+  initiated, not at server start.
+- **Stage:** Baseline Microservices (EC2 deployment infrastructure).
+
+## [2026-07-23] Baseline-native seed script: services/product-service/scripts/seed-products.js
+
+- **Decision:** created a Baseline-native seed script at
+  `services/product-service/scripts/seed-products.js`, adapted from the
+  Monolith's `scripts/seed-products.js`. The original imported
+  `connectDB`/`cloudinary`/`Product` from `../backend/lib/db.js`,
+  `../backend/lib/cloudinary.js`, and `../backend/models/product.model.js`
+  - reaching into the Monolith's own internals from a Baseline context.
+  The adapted version imports these from `product-service`'s own
+  `src/lib/db.js`, `src/lib/cloudinary.js`, and `src/models/product.model.js`
+  instead, and loads `services/product-service/.env` rather than the
+  repo root's. Keeps Baseline Microservices architecturally
+  self-contained - seeding its own database no longer depends on the
+  Monolith's code existing or being wired correctly.
+- **Import-order hazard found and worked around:** `src/lib/cloudinary.js`
+  calls `cloudinary.config(...)` at module-load time, using its own bare
+  `dotenv.config()` (no path argument). Since ES module imports always
+  execute before any code below them in the importing file, the script's
+  own path-specific `dotenv.config({ path: "../.env" })` line runs *after*
+  `cloudinary.config()` has already fired - too late to affect it if the
+  process's working directory doesn't already resolve to
+  `services/product-service`. The fix is invocation, not code: the
+  script must be run **from `services/product-service`'s own directory**
+  (`cd services/product-service && node scripts/seed-products.js`), so
+  that `cloudinary.js`'s bare `dotenv.config()` finds the correct `.env`
+  directly at import time - the same way the real service itself is
+  always started. Documented directly in the script's header comment so
+  this isn't rediscovered the hard way next time.
+- **Verification:** ran successfully from `product-service`'s EC2
+  instance - `MongoDB connected: ac-l11pxv5-shard-00-02.2cibdjn.mongodb.net`,
+  **27 created, 0 skipped**, matching the same per-category distribution
+  used throughout this project (cement/pipes/plank/rods/roofing-sheet/
+  wall-paints: 4 each, water-tank: 3), each with a real Cloudinary
+  upload. Independently confirmed live via the running service's own
+  API (`/api/products/featured`, `/api/products/category/cement`),
+  matching the seed script's own report exactly.
+- **Stage:** Baseline Microservices.
+
+## [2026-07-23] Backend smoke test finds cookie-based auth cannot work cross-service on Baseline's current EC2 topology
+
+- **Finding:** a curl-based smoke test (signup + login on user-service,
+  then an authenticated request to cart-service using the saved cookie
+  jar) confirmed that cookie-based authentication **cannot span
+  services** in Baseline's current deployment (five separate EC2
+  instances, no shared domain, no gateway). Cookies set by user-service
+  are host-only (no `Domain` attribute), scoped to its specific IP
+  (`35.181.186.152`) - confirmed directly from curl's own cookie jar,
+  which shows `#HttpOnly_35.181.186.152` scoping the `accessToken`/
+  `refreshToken` entries. They were never sent to cart-service's
+  different IP (`13.37.226.159`), which correctly returned
+  `401 Unauthorized - No access token provided`.
+- **Not a SameSite/Secure configuration bug**, unlike the Monolith's
+  HTTP-only cookie issue above. Changing `sameSite` to `"none"` would
+  not fix this - the cookie's `Domain` never matches cart-service's
+  host in the first place, so it's never even a candidate to be sent,
+  regardless of `SameSite`/`Secure` values. This is an inherent
+  architectural property of the current topology: with no unifying
+  origin, cookie-based auth fundamentally cannot span services.
+- **Why this was never caught in local dev:** cookies are scoped by
+  hostname only, not by port. When all five services ran on `localhost`
+  at different ports (the original local-dev/Docker Compose setup), a
+  cookie set by user-service at `localhost:5002` was still sent to
+  cart-service at `localhost:5003`, since both share the same hostname.
+  The limitation was invisible until deployment put each service on a
+  genuinely different host.
+- **Confirmed not a known/worked-around limitation:** grepped
+  `Authorization`/`Bearer` across all five services'
+  `src/middleware/auth.middleware.js` files - zero matches; every one
+  reads `req.cookies.accessToken` only, with no header-based fallback.
+  `frontend-baseline/src/lib/api.js` relies purely on `withCredentials:
+  true` (cookies), with no `Authorization` header logic anywhere in
+  `frontend-baseline/src`. No prior entry in this file addresses this
+  specific cross-host cookie-scoping issue (the closest, the 2026-07-16
+  User/Auth Service extraction entry, covers stateless *token
+  verification* design - a different concern from whether the cookie
+  can physically reach the service at all).
+- **Significance:** a citable, demonstrable finding supporting this
+  dissertation's core thesis - this is precisely the kind of
+  cross-cutting concern (shared authentication across services) that
+  motivates Enhanced Microservices' API Gateway architecture, which
+  solves this exact problem via a single origin plus
+  `SameSite=None`/`Secure` cookies (see the cross-origin cookie fix
+  entry above). Baseline's inability to do this cleanly, without a
+  Gateway, is itself part of the Baseline-vs-Enhanced comparison this
+  project is built around.
+- **Action item:** decide how (or whether) to work around this for
+  Baseline's remaining testing - e.g. a temporary shared-domain/DNS
+  setup, switching to `Authorization: Bearer` token forwarding for
+  Baseline specifically, or documenting cross-service authenticated
+  flows as a known, out-of-scope limitation of this stage's
+  no-Gateway topology.
+- **Stage:** Baseline Microservices.
