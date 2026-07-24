@@ -17,6 +17,8 @@ export const useUserStore = create((set, get) => ({
 
 		try {
 			const res = await userApi.post("/auth/signup", { name, email, password });
+			localStorage.setItem("accessToken", res.data.accessToken);
+			localStorage.setItem("refreshToken", res.data.refreshToken);
 			set({ user: res.data, loading: false });
 		} catch (error) {
 			set({ loading: false });
@@ -29,6 +31,8 @@ export const useUserStore = create((set, get) => ({
 		try {
 			const res = await userApi.post("/auth/login", { email, password });
 
+			localStorage.setItem("accessToken", res.data.accessToken);
+			localStorage.setItem("refreshToken", res.data.refreshToken);
 			set({ user: res.data, loading: false });
 		} catch (error) {
 			set({ loading: false });
@@ -38,10 +42,14 @@ export const useUserStore = create((set, get) => ({
 
 	logout: async () => {
 		try {
-			await userApi.post("/auth/logout");
+			const refreshToken = localStorage.getItem("refreshToken");
+			await userApi.post("/auth/logout", { refreshToken });
 			set({ user: null });
 		} catch (error) {
 			toast.error(error.response?.data?.message || "An error occurred during logout");
+		} finally {
+			localStorage.removeItem("accessToken");
+			localStorage.removeItem("refreshToken");
 		}
 	},
 
@@ -62,7 +70,10 @@ export const useUserStore = create((set, get) => ({
 
 		set({ checkingAuth: true });
 		try {
-			const response = await userApi.post("/auth/refresh-token");
+			const refreshToken = localStorage.getItem("refreshToken");
+			const response = await userApi.post("/auth/refresh-token", { refreshToken });
+			localStorage.setItem("accessToken", response.data.accessToken);
+			localStorage.setItem("refreshToken", response.data.refreshToken);
 			set({ checkingAuth: false });
 			return response.data;
 		} catch (error) {
