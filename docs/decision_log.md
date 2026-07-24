@@ -2739,3 +2739,75 @@ Written for direct reuse in the dissertation's methodology chapter.
   meant to measure, per this file's running principle since the first
   four-optimizations entry. Enhanced Microservices (Stage 3) has not
   been started.
+
+### [2026-07-24] Baseline cross-service cookie limitation resolved via Authorization: Bearer header auth; SSH security-group rule updated to redeploy
+- **Decision:** Baseline Microservices' cross-service cookie-scoping
+  limitation (documented earlier: host-only cookies from User Service
+  cannot cross to a different EC2 IP with no shared domain/gateway) is
+  resolved by fully switching from cookie-based to `Authorization:
+  Bearer <token>` header-based authentication, on the
+  `baseline-microservices` branch:
+  - `services/user-service/src/controllers/auth.controller.js`:
+    `signup`, `login`, and `refreshToken` now return `accessToken` and
+    `refreshToken` in the JSON response body (in addition to, then
+    instead of, cookies); `setCookies()` and all `res.cookie`/
+    `res.clearCookie` calls removed entirely; `logout` and
+    `refreshToken` now read the refresh token from
+    `req.body.refreshToken` instead of `req.cookies.refreshToken`.
+  - All 5 services' `services/*/src/middleware/auth.middleware.js`
+    (`protectRoute`) switched from reading `req.cookies.accessToken` to
+    parsing `Authorization: Bearer <token>` from `req.headers.authorization`.
+  - `services/order-service`'s service-to-service token forwarding
+    (`payment.controller.js`, `couponServiceClient.js`,
+    `cartServiceClient.js`) updated to match: reads the access token
+    from its own incoming `Authorization` header (guaranteed present,
+    since these routes sit behind `protectRoute`) instead of
+    `req.cookies.accessToken`, and forwards it to Coupon Service/Cart
+    Service as `Authorization: Bearer <token>` instead of a `Cookie:
+    accessToken=...` header.
+  - Commits (`baseline-microservices`): `7f6640f` (response-body
+    tokens), `bbcfe83` (middleware), `8587ab7` (order-service
+    forwarding fix), `316818a` (dead cookie code removed). Pushed to
+    `origin/baseline-microservices`.
+- **Rationale:** This is a full switch, not dual cookie/header support -
+  keeping both would leave dead, misleading code paths once nothing
+  sets or reads cookies for auth. Baseline's plain-HTTP, bare-IP,
+  no-gateway topology has no same-origin convenience to preserve by
+  keeping cookies, and stateless JWT verification (per `CLAUDE.md`)
+  already assumes each service can authenticate a request purely from
+  the token it's given - a header is a more direct fit for that than a
+  cookie ever was here. `refreshToken`/`logout` moving to
+  `req.body.refreshToken` follows the same logic: refresh tokens are
+  now explicitly POSTed, not implicitly attached like a cookie.
+- **Deployment note - unrelated SSH access issue found and fixed along
+  the way:** rolling out this change to the 5 Baseline EC2 instances
+  (`git pull` + `pm2 restart`, one instance at a time) was initially
+  blocked by an SSH connection timeout to all 5 hosts. Root cause: all
+  5 instances share one security group (`sg-08b98e852875628dc`), whose
+  port-22 inbound rule was scoped to a single IP
+  (`197.210.226.51/32`) that no longer matched the current outbound IP
+  (`197.210.54.197`, a dynamic residential IP that had since changed) -
+  the security group silently drops non-matching traffic, producing a
+  timeout rather than a refusal, which is what made this look like an
+  infrastructure fault at first rather than an access-list mismatch.
+  Fixed by revoking the stale rule and authorizing the current IP
+  (`197.210.54.197/32`) on the same security group. This is an
+  operational access-control fix, not an architectural decision, but is
+  logged here since it blocked (and could reoccur before) this stage's
+  deployments.
+- **Verification:** All 5 instances pulled the same fast-forward merge
+  (`6b804ad..316818a`, 9 files changed) and restarted cleanly via pm2
+  (`status: online`, no entries in any service's `pm2` error log,
+  MongoDB-backed services reconfirmed connected). Confirmed none showed
+  `Already up to date` (i.e. every host genuinely picked up the new
+  commits, not a stale no-op pull).
+- **Alternatives considered:** A temporary shared-domain/DNS setup so
+  cookies could carry a common `Domain` attribute across the 5 IPs -
+  rejected as a heavier, more artificial fix for a stage whose explicit
+  design (per `CLAUDE.md`) has no gateway/orchestration yet; introducing
+  DNS here would blur the Baseline/Enhanced distinction the dissertation
+  relies on (Enhanced is where a gateway and unified entry point are
+  meant to appear). `Authorization: Bearer` forwarding was chosen as the
+  workaround explicitly anticipated in this file's earlier entry
+  documenting the cookie-scoping limitation.
+- **Stage:** Baseline Microservices.
