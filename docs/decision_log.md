@@ -2230,3 +2230,41 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Monolith. (Baseline Microservices and Enhanced Microservices
   already covered by the prior entry above; `services/` and
   `frontend-baseline/` were not touched this session.)
+
+### [2026-07-25] Monolith EC2 instance found to have silently drifted from git - detached HEAD with an uncommitted hand-patched fix
+- **Finding:** while deploying the coupon-state re-sync fix (this
+  branch's latest commit) to the Monolith EC2 instance, discovered the
+  instance was in **detached HEAD at `v1.4-monolith-baseline`** - the
+  original tag from *before* the `secure: false` cookie fix (see this
+  branch's earlier entry / `v1.4.1-monolith-baseline-deployment-fix`)
+  was ever committed to git. That fix had instead been applied as an
+  **uncommitted, hand-patched local edit** directly on the instance
+  (presumably via SSH/`nano` during the original live debugging
+  session), and the instance was never actually migrated onto the
+  `monolith-deployment-fixes` branch afterward. This meant the
+  instance's running code and its git history had been silently out of
+  sync since that original fix was made - `git log` on this branch
+  told a story (a clean, tagged fix) that didn't match what was
+  actually deployed (an unversioned local patch on top of an older
+  tag).
+- **Verified before touching anything:** diffed the instance's
+  uncommitted `backend/controllers/auth.controller.js` against
+  `origin/monolith-deployment-fixes`'s committed version of the same
+  file - byte-identical (`diff` exit code `0`) - before discarding the
+  local edit, so no risk of silently losing a divergent hotfix that
+  only existed on the instance.
+- **Fixed:** discarded the now-redundant uncommitted edit (`git
+  restore`), then correctly checked out `monolith-deployment-fixes`.
+  The instance now properly tracks that branch going forward, instead
+  of sitting on a detached, hand-patched tag.
+- **Also fixed in passing:** the same recurring stale-SSH-IP security
+  group issue seen elsewhere this week - Monolith's security group
+  (`sg-05db2bd2fe6c64e2b`) still had the outdated CIDR rule, blocking
+  SSH access until updated to the current IP.
+- **Action item:** periodically verify EC2 instances are actually on
+  the expected branch/commit rather than assuming - manual hotfixes
+  applied directly via SSH, however well-intentioned in the moment, can
+  silently diverge from what git records as deployed, and nothing
+  surfaces that gap until someone happens to try a `git checkout` or
+  `git pull` on the box again.
+- **Stage:** Monolith (EC2 deployment infrastructure).
