@@ -7,7 +7,7 @@ import Confetti from "react-confetti";
 
 const PurchaseSuccessPage = () => {
 	const [isProcessing, setIsProcessing] = useState(true);
-	const { clearCart } = useCartStore();
+	const { clearCart, getMyCoupon } = useCartStore();
 	const [error, setError] = useState(null);
 
 	useEffect(() => {
@@ -17,6 +17,7 @@ const PurchaseSuccessPage = () => {
 					sessionId,
 				});
 				clearCart();
+				getMyCoupon();
 			} catch (error) {
 				console.log(error);
 			} finally {
@@ -31,7 +32,7 @@ const PurchaseSuccessPage = () => {
 			setIsProcessing(false);
 			setError("No session ID found in the URL");
 		}
-	}, [clearCart]);
+	}, [clearCart, getMyCoupon]);
 
 	if (isProcessing) return "Processing...";
 
