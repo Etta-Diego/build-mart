@@ -2838,3 +2838,69 @@ Written for direct reuse in the dissertation's methodology chapter.
   service-quotas get-requested-service-quota-change` before attempting
   the launch again.
 - **Stage:** Baseline Microservices.
+
+### [2026-07-24] frontend-baseline deployed to its own 6th EC2 instance, served via nginx from /var/www
+- **Decision:** deployed `frontend-baseline` to a new, dedicated EC2
+  instance (`i-0a7310f425c43db83`, Elastic IP `15.237.90.142`), in the
+  same VPC as the 5 Baseline backend service instances, once the vCPU
+  quota increase requested above was approved. Built with `.env` pointed
+  at the 5 real backend services' Elastic IPs (product, user, cart,
+  coupon, order), not `localhost`, consistent with every other Baseline
+  `.env` on record in this file. Served via nginx.
+- **nginx serves from `/var/www/frontend-baseline`, not the home
+  directory:** the first attempt served the Vite build directly from
+  `~/build-mart/frontend-baseline/dist` and returned `500 Internal
+  Server Error` - nginx's worker process runs as `www-data`, and
+  `/home/ubuntu` itself defaults to `drwxr-x---` (750), which blocks
+  `www-data` from traversing into it at all, regardless of how
+  permissive `dist/` and its contents are underneath. This is a common
+  gotcha when serving a static build from a home directory instead of
+  the conventional `/var/www/` location. Fixed by copying the built
+  `dist/` output to `/var/www/frontend-baseline`, `chown -R
+  www-data:www-data` on it, and pointing nginx's `root` directive there
+  instead - confirmed via `curl -I` returning `200 OK` both locally and
+  externally via the Elastic IP.
+- **Action item - rebuild process note:** because `dist/` is copied to
+  `/var/www/` rather than served in place, any future `npm run build`
+  on this instance requires re-running `sudo cp -r dist/*
+  /var/www/frontend-baseline/` and re-`chown`-ing to `www-data`
+  afterward, or nginx will keep serving the stale previous build. Worth
+  scripting if rebuilds become frequent enough to make the manual step
+  error-prone.
+- **Stage:** Baseline Microservices.
+
+### [2026-07-25] frontend-baseline deploy process corrected - stale hashed assets were accumulating, initially masquerading as a gzip performance regression
+- **Decision:** corrected the frontend-baseline deploy process on its
+  EC2 instance. The initial deploy command (`sudo cp -r dist/*
+  /var/www/frontend-baseline/`, from the entry above) only adds files,
+  never removes them - since Vite generates content-hashed filenames
+  per build (e.g. `index-C3QRSEP-.js` -> `index-CJPXew38.js`), each
+  rebuild left the previous build's JS/CSS bundles orphaned in
+  `/var/www/frontend-baseline/`, accumulating stale, unused assets
+  rather than replacing them. This is exactly the risk flagged as an
+  open action item in the entry above, now confirmed to have actually
+  occurred.
+- **How this was discovered:** while investigating an apparent
+  performance *regression* after enabling gzip compression on this
+  instance - a timing test that appeared to show gzip making load time
+  worse was actually testing the **stale, previous-build file**, not
+  the current one `index.html` was actually referencing and nginx was
+  actually serving to real requests.
+- **Fix:** the deploy process now clears the target directory before
+  copying in the new build: `sudo rm -rf /var/www/frontend-baseline/*
+  && sudo cp -r dist/* /var/www/frontend-baseline/` (replacing the bare
+  `cp -r` step), applied to the instance and verified - confirmed via
+  `ls` on `/var/www/frontend-baseline/assets/` showing only the current
+  build's files immediately after, and the site still returning `200
+  OK` afterward. This is now the standard command for all future
+  frontend-baseline rebuilds on this instance.
+- **Verification - gzip's real effect, once testing the correct
+  current asset:** ~7.7s / 101KB/s (pre-gzip baseline) down to
+  ~1.8-2.9s / 270-430KB/s (post-gzip, correct file) - a genuine,
+  substantial improvement, not the regression the stale-file test
+  initially suggested. Recorded here as a caution for interpreting any
+  other timing/performance results gathered on this instance before
+  this fix: any measurement taken between the gzip config entry above
+  and this fix is at risk of the same stale-file confound and should be
+  treated as unreliable, not just this one gzip test.
+- **Stage:** Baseline Microservices.
