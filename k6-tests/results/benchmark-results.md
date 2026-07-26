@@ -150,6 +150,67 @@ came online) - a real, honest cost of the scaling process, not a
 system failure. Full new-replica capacity resolved the degradation 
 within the same test run.
 
+### Enhanced Scaling Test (500 VUs, post-infrastructure-expansion)
+
+Prior to this test, two infrastructure changes were made to give 
+Enhanced additional headroom:
+1. HPA maxReplicas raised from 6 to 10 (product-service-hpa and 
+   order-service-hpa)
+2. EKS node group scaled from 2 to 3 t3.medium nodes
+
+Result (in-region runner, post-M10 MongoDB upgrade):
+- 500 VUs, 3 minutes, 65,772 requests
+- 99.44% success rate (0.55% failure, 366 requests)
+- p95 latency: 843.17ms
+- Throughput: 358.77 req/s
+
+This demonstrates Enhanced's capacity scales meaningfully with added 
+infrastructure - handling 2.5x the concurrent load (200->500 VUs) 
+with only a modest increase in failure rate (0.29%->0.55%) once given 
+additional node capacity and a higher HPA ceiling. This is a direct, 
+practical demonstration of horizontal scalability: capacity grows 
+when resources are added, in contrast to Monolith and Baseline, 
+which have no equivalent mechanism and would require manual instance 
+resizing (with associated downtime) to achieve the same effect.
+
+### Enhanced Full-Scale Test (100-2000 VUs, Post-Infrastructure-Correction)
+
+Infrastructure state for this test series: pods resized (500m/1000m 
+CPU for product-service and order-service), HPA maxReplicas raised 
+to 20, EKS node group scaled to 11 t3.medium nodes (target was 12, 
+blocked by EC2 vCPU account quota - see decision_log.md), MongoDB 
+Atlas on M10 tier.
+
+| VUs | Failure rate | p95 latency | Throughput |
+|-----|--------------|-------------|------------|
+| 100 | 0.18% | 21.67ms | 98.6 req/s |
+| 200 | 0.10% | 25.06ms | 196.2 req/s |
+| 400 | 0.12% | 108.39ms | 386.4 req/s |
+| 600 | 0.16% | 165.31ms | 571.4 req/s |
+| 800 | 0.18% | 35.86ms | 774.8 req/s |
+| 1000 | 0.08% | 80.33ms | 966.9 req/s |
+| 1200 | 0.06% | 52.07ms | 1160.3 req/s |
+| 1400 | 0.30% | 1.31s | 797.0 req/s |
+| 1600 | 0.06% | 193.36ms | 1499.9 req/s |
+| 1800 | 0.72% | 912.44ms | 1305.5 req/s |
+| 2000 | 0.53% | 715.24ms | 1412.6 req/s |
+
+Key finding: performance remained excellent and stable up to 1200 
+VUs (2 replicas sufficient, no scaling needed). From 1400-2000 VUs, 
+the system entered an active scaling transition zone (confirmed via 
+live HPA monitoring - product-service scaled from 2 to 15 replicas 
+during this range), characterized by variable but bounded strain: 
+brief spikes in latency/failure rate (1400 VUs: p95 1.31s, 0.30% 
+failure; 1800 VUs: p95 912ms, 0.72% failure) followed by recovery 
+once new capacity stabilized (1600 VUs: p95 193ms, 0.06% failure). 
+Failure rate never exceeded 0.72% and remained well within the 5% 
+threshold throughout the entire 100-2000 VU range (a 20x increase in 
+load), demonstrating that Enhanced's architecture can absorb 
+substantial, sustained demand growth through horizontal autoscaling, 
+with temporary but bounded performance variability during active 
+scaling events - a realistic and honest characterization of 
+autoscaling behavior under genuine load growth.
+
 ## 4. Resource Utilization Under Load (Enhanced)
 
 Methodology: kubectl top pods polled every 5 seconds throughout the 
@@ -194,6 +255,168 @@ rate, p95 latency of 33.44 seconds). This provides a complete,
 empirically-measured capacity profile for a fixed-resource 
 architecture, directly supporting Objective 3's evaluation of 
 scalability and resource utilization limits.
+
+### Monolith Full-Scale Test (100-2000 VUs, in-region runner, post-MongoDB M10 upgrade)
+
+Matching the same VU levels as the Enhanced Full-Scale Test above, 
+for direct comparison.
+
+| VUs | Failure rate | p95 latency | Throughput |
+|-----|--------------|-------------|------------|
+| 100 | 0.00% | 8.99ms | 99.3 req/s |
+| 200 | 0.00% | 8.9ms | 198.1 req/s |
+| 400 | 0.00% | 23.37ms | 394.5 req/s |
+| 500 | 0.00% | 50.25ms | 487.8 req/s |
+| 600 | 0.00% | 100.62ms | 580.0 req/s |
+| 800 | 0.00% | 312.41ms | 704.4 req/s |
+| 1000 | 0.00% | 567.64ms | 725.9 req/s |
+| 1200 | 0.00% | 996.88ms | 722.0 req/s |
+| 1400 | 0.00% | 1.45s | 715.2 req/s |
+| 1600 | 0.00% | 1.91s | 706.7 req/s |
+| 1800 | 0.00% | 2.36s (threshold breached) | 706.3 req/s |
+| 2000 | 0.00% (but p95 threshold breached) | 2.74s | 703.7 req/s |
+
+Key finding: Monolith maintained 0% HTTP failure rate at every 
+single tested load level, including 2000 VUs - a genuinely 
+remarkable result for a single t3.small instance with no 
+orchestration. However, latency degrades severely and predictably 
+with load: p95 climbs from 9ms at 100 VUs to 2.36s at 1800 VUs and 
+2.74s at 2000 VUs, crossing the 2-second usability threshold between 
+1600-1800 VUs. Throughput plateaus at approximately 700-725 req/s 
+from 800 VUs onward, confirming Monolith reaches its genuine hard 
+capacity ceiling through severe latency degradation rather than 
+outright request rejection - the server keeps accepting and 
+eventually answering every request, but response times become 
+impractical for real users well before any request technically fails.
+
+### Baseline Full-Scale Test (100-2000 VUs, in-region runner, post-MongoDB M10 upgrade)
+
+Matching the same VU levels as the Enhanced and Monolith Full-Scale 
+Tests above, for direct comparison.
+
+| VUs | Failure rate | p95 latency | Throughput |
+|-----|--------------|-------------|------------|
+| 100 | 0.00% | 10.21ms | 99.2 req/s |
+| 200 | 0.00% | 10.99ms | 198.0 req/s |
+| 400 | 0.00% | 26.17ms | 392.1 req/s |
+| 600 | 0.00% | 211.34ms | 553.1 req/s |
+| 800 | 0.00% | 386.06ms | 681.9 req/s |
+| 1000 | 0.00% | 730.2ms | 686.7 req/s |
+| 1200 | 0.00% | 1.13s | 686.2 req/s |
+| 1400 | 0.00% | 1.62s | 680.9 req/s |
+| 1600 | 0.00% | 2.16s (threshold breached) | 675.6 req/s |
+| 1800 | 0.00% | 2.7s (threshold breached) | 669.4 req/s |
+| 2000 | 0.00% | 3.09s (threshold breached) | 668.2 req/s |
+
+Key finding: Baseline (product-service on a single t3.micro 
+instance) maintained a 0% HTTP failure rate at every single tested 
+load level from 100 to 2000 VUs - matching Monolith's pattern of 
+never technically failing a request despite extreme load. However, 
+latency degrades severely and predictably: p95 climbs from 10ms at 
+100 VUs to 3.09s at 2000 VUs, crossing the 2-second usability 
+threshold between 1400-1600 VUs (earlier than Monolith's 1600-1800 
+VU breach point, consistent with the t3.micro's smaller resource 
+allocation compared to Monolith's t3.small). Throughput plateaus 
+around 668-687 req/s from 800 VUs onward, confirming - like Monolith 
+- that Baseline reaches its genuine capacity ceiling through severe 
+latency degradation rather than outright request rejection.
+
+### Resource Utilization Comparison (200/1000/2000 VUs)
+
+Source data: `k6-tests/results/*-resources-*vu.csv` (Monolith,
+Baseline) and `k6-tests/results/enhanced-resource-usage-run2.csv`
+(Enhanced).
+
+**Methodological note - Monolith/Baseline and Enhanced are NOT on the
+same basis, for two separate reasons, both important:**
+1. **Different measurement targets:** Monolith and Baseline figures
+   are a single fixed EC2 instance's CPU/memory, sampled at three
+   separate, discrete load levels (200, 1000, 2000 VUs) via host-level
+   `top`-style monitoring - CPU is reported as **% of the host's total
+   CPU**. Enhanced's figures are `kubectl top pods` readings for
+   `product-service` pods specifically, reported in **millicores
+   against each pod's 1000m CPU limit** - a different unit and a
+   different denominator entirely, not just a different sampling
+   method.
+2. **Different test entirely, not three matched VU levels:** the only
+   Enhanced pod-usage data available (`enhanced-resource-usage-run2.csv`)
+   is **not** from the 200/1000/2000-VU Full-Scale Test series above -
+   it predates it by roughly two days and tops out at 5 replicas,
+   matching the earlier, much smaller 100-VU HPA test documented in
+   Section 3, not a 2000-VU run. No Enhanced pod-usage data matching
+   the actual Full-Scale Test's 1400-2000 VU scaling event (2->15
+   replicas) currently exists. Rather than force this mismatched data
+   into fake 200/1000/2000 VU rows, Enhanced is reported below as its
+   own continuous timeline, summarized by phase (baseline / peak-load /
+   post-scaling), covering its one available full load-and-scale-down
+   cycle.
+
+**Monolith and Baseline (single instance, host-level CPU%):**
+
+| Architecture | VUs | Avg CPU% | Peak CPU% | Avg Mem (MB) | Peak Mem (MB) |
+|---|---|---|---|---|---|
+| Monolith (t3.small) | 200 | 15.3% | 48.4% | 315.5 | 341 |
+| Monolith (t3.small) | 1000 | 50.0% | 71.0% | 341.1 | 369 |
+| Monolith (t3.small) | 2000 | 57.5% | 93.9% | 397.8 | 437 |
+| Baseline product-service (t3.micro) | 200 | 19.1% | 54.8% | 297.2 | 321 |
+| Baseline product-service (t3.micro) | 1000 | 53.6% | 75.0% | 323.7 | 338 |
+| Baseline product-service (t3.micro) | 2000 | 58.5% | 93.9% | 384.1 | 405 |
+
+**Enhanced (per-pod, `product-service`, millicores against a 1000m
+limit - separate load-and-scale cycle, not matched to the table
+above):**
+
+| Phase | Replicas | Avg CPU (m / % of limit) | Peak CPU (m / % of limit) | Avg Mem (Mi) | Peak Mem (Mi) |
+|---|---|---|---|---|---|
+| Baseline | 2 | 41.8m / 4.2% | 93m / 9.3% | 49.4 | 53 |
+| Peak-load (scaled 2->4->5) | 5 | 49.3m / 4.9% | 99m / 9.9% | 44.9 | 53 |
+| Post-scaling, 4 replicas | 4 | 5.75m / 0.6% | 8m / 0.8% | 42.0 | 49 |
+| Post-scaling, 2 replicas (scale-down tail) | 2 | 3.0m / 0.3% | 3m / 0.3% | 46.0 | 49 |
+| Overall (full cycle) | 2->4->5->4->2 | 51.4m / 5.1% | 99m / 9.9% | 46.1 | 54 |
+
+Sample-size caveat: the 2-replica scale-down tail row above is drawn
+from a single timestamp (`t=522`) across only 2 pods (n=2) - the
+smallest sample of any row in this table, captured right at the end
+of the timeline as replicas were still winding down. Its very low
+CPU reading should be read as a snapshot of that specific moment, not
+a statistically robust average the way the baseline/peak-load rows
+(n=28 and n=35 respectively) are.
+
+Key finding: Baseline's t3.micro runs modestly hotter than Monolith's
+t3.small at equivalent VU levels (+3.8pp avg / +6.4pp peak CPU at 200
+VUs, +3.6pp avg / +4.0pp peak at 1000 VUs), but the gap narrows to
+nearly nothing by 2000 VUs (+1.0pp avg, peak tied at 93.9%) - both
+instances are 2-vCPU, so raw CPU% is on a comparable scale throughout.
+This modest CPU gap alone does not fully explain why Baseline's p95
+latency crossed the 2-second usability threshold earlier than
+Monolith's (1400-1600 VUs vs. 1600-1800 VUs, per the Full-Scale Test
+tables above). The more likely compounding factor is memory headroom:
+t3.micro has half the total RAM of t3.small (1 GiB vs. 2 GiB), so
+similar absolute memory usage (297-405 MB vs. 315-437 MB) consumes a
+substantially larger *fraction* of t3.micro's total capacity, on top
+of t3.micro's lower baseline CPU-credit allocation under AWS's
+burstable-instance model - neither effect being fully visible in a
+same-instant CPU% reading. Enhanced's per-pod figures show
+consistently low CPU/memory usage relative to its 1000m/512Mi
+limits throughout its one available test cycle (never exceeding 9.9%
+of its CPU limit, even at peak replica count), consistent with HPA
+successfully distributing load across replicas rather than any single
+pod being pushed toward its own resource ceiling - though this cannot
+be directly compared to Monolith/Baseline's numbers above without
+first correcting for the differences noted above. Notably, per-pod
+CPU during peak-load (49.3m avg across 5 replicas) was *higher* than
+baseline (41.8m avg across 2 replicas), not lower - confirming the
+scale-up genuinely absorbed real, increased load rather than adding
+idle capacity. The much lower per-pod CPU seen in the post-scaling
+rows should be read as **successful load distribution across more
+pods as traffic wound down at the end of the test**, not as evidence
+that the earlier scale-up to 5 replicas was unnecessary - each pod
+was doing proportionally less work because the same (now-decreasing)
+total traffic was being shared across a larger pool of replicas, which
+is exactly the intended effect of horizontal autoscaling working
+correctly. **Action item:**
+capture Enhanced pod-usage data during an actual 200/1000/2000-VU-
+matched test run, to allow a genuinely apples-to-apples comparison.
 
 ## 6. Full User Journey Load Test (k6)
 (pending - script not yet built)
