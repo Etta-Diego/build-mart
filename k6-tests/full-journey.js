@@ -64,6 +64,10 @@ export default function () {
     { headers: { "Content-Type": "application/json" } }
   );
   check(res, { "signup: status 201": (r) => r.status === 201 });
+  if (res.status !== 201) {
+    // TEMPORARY - remove once real failure cause is identified
+    console.log(`Signup failed: status ${res.status}, body: ${res.body}`);
+  }
 
   let token = null;
   if (cfg.authMode === "bearer" && res.status === 201) {
