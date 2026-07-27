@@ -24,7 +24,6 @@ export async function clearCart(accessToken) {
 
 	let response;
 	try {
-		const __clearCartStart = Date.now();
 		response = await fetch(`${baseUrl}/api/cart`, {
 			method: "DELETE",
 			headers: {
@@ -34,8 +33,6 @@ export async function clearCart(accessToken) {
 			body: JSON.stringify({}),
 			signal: controller.signal,
 		});
-		// TEMPORARY - remove after capturing real measurements
-		console.log(`order->cart clearCart latency: ${Date.now() - __clearCartStart}ms`);
 	} catch (error) {
 		throw new CartServiceUnavailableError(`Could not reach Cart Service: ${error.message}`);
 	} finally {
