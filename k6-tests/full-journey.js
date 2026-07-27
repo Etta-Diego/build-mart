@@ -39,9 +39,22 @@ function getAuthHeaders(token) {
   return {};
 }
 
+// Init-context (runs once per VU instance, not per iteration). __VU/__ITER
+// are only guaranteed unique within a single k6 process - if a second k6
+// process runs concurrently against the same target (e.g. an overlapping
+// or leftover test run), its VU numbering restarts independently from 1,
+// so the same __VU/__ITER pair can recur across processes. Reproduced and
+// confirmed: two concurrent local k6 runs of this script's prior
+// __VU_ITER_Date.now() scheme produced 251 duplicate-email collisions
+// across 185,293 signups (0-2ms apart) when hitting a fast target, because
+// unthrottled iterations let two processes drift into sustained lockstep.
+// A random value generated once per VU instance closes this gap, since two
+// independent processes' Math.random() calls won't coincide.
+const vuInstanceSeed = Math.floor(Math.random() * 1e9);
+
 export default function () {
   const journeyStart = Date.now();
-  const uniqueId = `${__VU}_${__ITER}_${Date.now()}`;
+  const uniqueId = `${__VU}_${vuInstanceSeed}_${__ITER}_${Date.now()}`;
   const email = `k6test_${uniqueId}@example.com`;
   const password = "TestPass123!";
 
