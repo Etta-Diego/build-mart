@@ -89,8 +89,10 @@ export default function () {
   check(res, { "view cart: status 200": (r) => r.status === 200 });
   sleep(1);
 
-  const shouldCompletePayment = Math.random() < 0.05;
-
+  // Full payment completion is not simulated, as Stripe Checkout
+  // Sessions require browser-based interaction to complete by design
+  // (PCI compliance) - this measures the complete backend journey
+  // through checkout-session creation.
   if (productId) {
     res = http.post(
       `${cfg.payments}/create-checkout-session`,
@@ -100,49 +102,6 @@ export default function () {
       { headers: { "Content-Type": "application/json", ...getAuthHeaders(token) } }
     );
     check(res, { "checkout session: status 200": (r) => r.status === 200 });
-
-    if (res.status === 200) {
-      const sessionData = JSON.parse(res.body);
-      const sessionId = sessionData.id;
-
-      if (shouldCompletePayment && sessionId) {
-        const stripeSecretKey = __ENV.STRIPE_SECRET_KEY;
-        if (stripeSecretKey) {
-          const sessionRes = http.get(
-            `https://api.stripe.com/v1/checkout/sessions/${sessionId}`,
-            { headers: { Authorization: `Bearer ${stripeSecretKey}` } }
-          );
-
-          if (sessionRes.status === 200) {
-            const session = JSON.parse(sessionRes.body);
-            const paymentIntentId = session.payment_intent;
-
-            if (paymentIntentId) {
-              const confirmRes = http.post(
-                `https://api.stripe.com/v1/payment_intents/${paymentIntentId}/confirm`,
-                `payment_method=pm_card_visa`,
-                {
-                  headers: {
-                    Authorization: `Bearer ${stripeSecretKey}`,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                  },
-                }
-              );
-              check(confirmRes, { "stripe payment confirmed": (r) => r.status === 200 });
-
-              if (confirmRes.status === 200) {
-                const successRes = http.post(
-                  `${cfg.payments}/checkout-success`,
-                  JSON.stringify({ sessionId }),
-                  { headers: { "Content-Type": "application/json", ...getAuthHeaders(token) } }
-                );
-                check(successRes, { "checkout-success: status 200": (r) => r.status === 200 });
-              }
-            }
-          }
-        }
-      }
-    }
   }
 
   const journeyDuration = Date.now() - journeyStart;
