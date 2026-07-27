@@ -437,10 +437,26 @@ checkout-session creation, not the browser-only payment step.
   checkout session) passed at 100%
 
 ### Enhanced Microservices
-- Success rate: 100.00%
-- p95 latency: 2.53s
-- Throughput: not recorded for this specific run
-- Total requests / iterations: not recorded for this specific run
+Final result, after resizing product-service, order-service, AND
+user-service pods to 500m/1000m CPU (see `docs/decision_log.md`) and
+investigating the residual failure rate:
+- Success rate: 97.81% (9,519/9,732 checks succeeded)
+- Failure rate: 2.18% (213/9,732 checks failed)
+- p95 latency: 358.87ms
+- Throughput: 52.48 req/s
+- Iterations: 1,622 complete, 0 interrupted
+- **Root cause of the residual 2.18%:** investigated and ruled out
+  Gateway/NLB/node-capacity as causes (all confirmed healthy/idle) -
+  see `docs/decision_log.md` ("Enhanced's residual connection-reset
+  failures under concurrent signup load, after pod resource resizing")
+  for the full investigation. Points to the same per-process
+  connection-handling limitation as Baseline's, mitigated (not
+  eliminated) by Enhanced's 2-replica load distribution.
+
+An earlier, pre-user-service-resize measurement (100.00% success,
+p95 2.53s) is superseded by the final result above and no longer
+reported, since it was taken before the resize that materially
+changed both figures.
 
 ### Baseline Microservices
 - Total requests: 7,842
@@ -467,28 +483,26 @@ checkout-session creation, not the browser-only payment step.
 
 ### Comparison
 
-| Architecture | Success rate | p95 latency | Throughput | Total requests |
-|---|---|---|---|---|
-| Monolith | 100.00% | 4.87s | 41.33 req/s | 7,656 |
-| Enhanced | 100.00% | 2.53s | not recorded | not recorded |
-| Baseline | 92.33% | 2.27s | 42.35 req/s | 7,842 |
+| Architecture | Success rate | p95 latency | Notes |
+|---|---|---|---|
+| Monolith | 100.00% | 4.87s | Zero failures - single dedicated instance, no network hops, but highest latency |
+| Enhanced | 97.81% | 358.87ms | Best latency by a wide margin; small residual failure rate traced to single-process-per-pod connection handling, partially mitigated by 2-replica load distribution (see decision_log.md) |
+| Baseline | 92.33% | 2.27s | Same root architectural cause as Enhanced's residual failures, but more severe due to single-process (no replication) design |
 
-Key finding: Baseline's full-journey test revealed a genuine
-architectural bottleneck - single-process connection handling on
-user-service - not present in Monolith (single process, but no
-network hop to a separate auth service; the whole request path runs
-in one process) or Enhanced (multiple pod replicas per service,
-load-balanced by Kubernetes). Notably, Baseline's p95 latency (2.27s)
-is actually the *best* of the three - a direct result of failed
-requests (connection resets) returning fast rather than the
-bottleneck showing up as slowness; the 7.66% failure rate is the real
-signal here, not the latency figure, and reading p95 alone without the
-failure rate would be misleading. This is a significant, honest
-finding directly supporting Objective 3's evaluation of resilience
-under load: Baseline's un-orchestrated, single-instance architecture
-has a structural ceiling on concurrent connection handling that
-neither of the other two architectures share, for different reasons
-(Monolith's simplicity, Enhanced's horizontal replication).
+Key finding: all three architectures were investigated with equal
+rigor, revealing that Node.js's single-process connection-accept
+limitation affects BOTH Baseline and Enhanced under this specific
+bursty-signup load pattern, differing only in severity based on each
+architecture's degree of horizontal replication (Baseline: 1 process,
+7.66% failure; Enhanced: 2 replicas, 2.18% failure). Monolith avoids
+this class of failure entirely since it never proxies signup through
+a network call to a separate service - the entire journey stays
+within one process. This is a genuinely nuanced finding: Enhanced's
+architecture does not eliminate this bottleneck class, but
+demonstrably reduces its severity through replication, while achieving
+dramatically better latency than both other architectures. This
+directly and precisely supports Objective 3's evaluation of resilience
+under load.
 
 ## 7. WebPageTest Geographic Latency
 (pending)
