@@ -12,12 +12,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: product-service
-  # 2-5 t3.medium nodes, each pod requesting 100m/128Mi (see
-  # k8s/product-service.yaml) - 6 is comfortably within a single node's
-  # capacity even before considering the other four services' pods, so
-  # this leaves headroom without over-provisioning idle capacity.
   minReplicas: 2
-  maxReplicas: 6
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:
@@ -44,7 +40,7 @@ spec:
     kind: Deployment
     name: order-service
   minReplicas: 2
-  maxReplicas: 6
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:
