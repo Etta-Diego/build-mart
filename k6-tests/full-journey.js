@@ -89,10 +89,15 @@ export default function () {
   check(res, { "view cart: status 200": (r) => r.status === 200 });
   sleep(1);
 
-  // Full payment completion is not simulated, as Stripe Checkout
+  // Full payment completion is not simulated - Stripe Checkout
   // Sessions require browser-based interaction to complete by design
-  // (PCI compliance) - this measures the complete backend journey
-  // through checkout-session creation.
+  // (PCI compliance), which k6 cannot replicate without full browser
+  // automation (e.g. xk6-browser). This script measures the complete
+  // backend journey through successful checkout-session creation,
+  // which exercises cart lookup, pricing calculation, coupon
+  // validation, and Stripe API integration - the substantive backend
+  // logic - without completing the final browser-only payment step.
+  // See docs/decision_log.md for further discussion.
   if (productId) {
     res = http.post(
       `${cfg.payments}/create-checkout-session`,
