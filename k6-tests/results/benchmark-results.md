@@ -419,7 +419,76 @@ capture Enhanced pod-usage data during an actual 200/1000/2000-VU-
 matched test run, to allow a genuinely apples-to-apples comparison.
 
 ## 6. Full User Journey Load Test (k6)
-(pending - script not yet built)
+
+Methodology: `k6-tests/full-journey.js` (signup -> browse featured
+products -> browse category -> add to cart -> view cart -> create
+checkout session), 50 VUs, 3-minute duration, run against all three
+architectures from the in-region EC2 runner. Full payment completion
+via Stripe was scoped out (documented in `docs/decision_log.md`) -
+the journey measures the complete backend flow through successful
+checkout-session creation, not the browser-only payment step.
+
+### Monolith
+- Success rate: 100.00%
+- p95 latency: 4.87s
+- Throughput: 41.33 req/s (7,656 total requests)
+- Iterations: 1,276 complete, 0 interrupted
+- All 6 checks (signup, featured, category, add to cart, view cart,
+  checkout session) passed at 100%
+
+### Enhanced Microservices
+- Success rate: 100.00%
+- p95 latency: 2.53s
+- Throughput: not recorded for this specific run
+- Total requests / iterations: not recorded for this specific run
+
+### Baseline Microservices
+- Total requests: 7,842
+- Success rate: 92.33% (7,241/7,842 checks succeeded)
+- Failure rate: 7.66% (601/7,842 checks failed)
+- Per-check breakdown: signup 88% (1,163/1,307 succeeded, 144
+  failures, all "connection reset by peer" from user-service);
+  featured/category 100%; add to cart 88% (144 failures, cascading
+  from the same failed signups - `token` stays `null` on signup
+  failure, so every subsequent authenticated call in that iteration
+  fails too); view cart 88% (same 144); checkout session 87% (169
+  failures)
+- p95 latency: 2.27s
+- Throughput: 42.35 req/s
+- Iterations: 1,307 complete, 0 interrupted
+- k6 threshold results: `p95<3000` PASSED (2.27s); `rate<0.05` FAILED
+  (7.66%)
+- **Root cause:** a genuine single-process connection-handling
+  bottleneck on user-service, not a resource-sizing issue - see
+  `docs/decision_log.md` ("Full-journey load test reveals a genuine
+  single-process connection-handling bottleneck on Baseline's
+  user-service") for the full investigation, including the
+  independently-verified `bcryptjs` mechanism behind it.
+
+### Comparison
+
+| Architecture | Success rate | p95 latency | Throughput | Total requests |
+|---|---|---|---|---|
+| Monolith | 100.00% | 4.87s | 41.33 req/s | 7,656 |
+| Enhanced | 100.00% | 2.53s | not recorded | not recorded |
+| Baseline | 92.33% | 2.27s | 42.35 req/s | 7,842 |
+
+Key finding: Baseline's full-journey test revealed a genuine
+architectural bottleneck - single-process connection handling on
+user-service - not present in Monolith (single process, but no
+network hop to a separate auth service; the whole request path runs
+in one process) or Enhanced (multiple pod replicas per service,
+load-balanced by Kubernetes). Notably, Baseline's p95 latency (2.27s)
+is actually the *best* of the three - a direct result of failed
+requests (connection resets) returning fast rather than the
+bottleneck showing up as slowness; the 7.66% failure rate is the real
+signal here, not the latency figure, and reading p95 alone without the
+failure rate would be misleading. This is a significant, honest
+finding directly supporting Objective 3's evaluation of resilience
+under load: Baseline's un-orchestrated, single-instance architecture
+has a structural ceiling on concurrent connection handling that
+neither of the other two architectures share, for different reasons
+(Monolith's simplicity, Enhanced's horizontal replication).
 
 ## 7. WebPageTest Geographic Latency
 (pending)
