@@ -3509,3 +3509,51 @@ Written for direct reuse in the dissertation's methodology chapter.
   flows as a known, out-of-scope limitation of this stage's
   no-Gateway topology.
 - **Stage:** Baseline Microservices.
+
+## [date not precisely recorded, prior to 2026-07-25] First occurrence: "primary marked stale" MongoDB connection error, product-service, following the Atlas M10 tier upgrade
+- **Context:** shortly after MongoDB Atlas was upgraded to the M10 tier
+  (to resolve connection-limit exhaustion during Enhanced load testing),
+  product-service threw a MongoDB error along the lines of "primary
+  marked stale due to electionId/setVersion mismatch," surfacing as a
+  failed request. This entry is being logged retroactively on
+  2026-07-27, alongside a second occurrence (see entry below) - the
+  exact original date and full symptom detail were not recorded at the
+  time and are reconstructed here from memory rather than a contemporary
+  log.
+- **Fix:** resolved via a process restart (pm2) at the time.
+- **Significance:** at the time this looked like a one-off, possibly
+  M10-migration-related hiccup. See the entry below for why a second,
+  later occurrence changes that interpretation.
+- **Stage:** cross-cutting (MongoDB Atlas is shared across all three
+  architectures).
+
+## [2026-07-27] Second occurrence: "primary marked stale" MongoDB connection error, Baseline's user-service, 2 days uptime - suggests a recurring long-lived-connection issue, not an M10-migration one-off
+- **Context:** discovered during this session's login troubleshooting -
+  Baseline's user-service (up ~2 days, no known Atlas-side change in
+  that window) hit the same "primary marked stale due to
+  electionId/setVersion mismatch" error as the product-service incident
+  above. It went uncaught until a fresh login attempt failed with a 500
+  error - i.e. the stale connection sat unused and undetected until
+  something actually tried to use it.
+- **Decision:** treat this as the second occurrence of the same
+  underlying issue, not an isolated bug. Since this instance has been
+  running for 2 days with no known Atlas-side event in that window, the
+  M10 upgrade itself can be ruled out as the specific cause - the
+  pattern instead points to long-lived Node.js/Mongoose connections to
+  Atlas going stale over time, most likely due to periodic Atlas-side
+  maintenance/failover events that are invisible to the application
+  until the connection is actually used again.
+- **Fix:** `pm2 restart` on all 4 MongoDB-connected Baseline services,
+  as a precaution (not just user-service), since any of them could be
+  holding an equally stale connection without having hit it yet.
+- **Action item / operational note:** in a production system, this
+  would warrant either periodic proactive connection health
+  checks/reconnection logic, or accepting occasional manual restarts as
+  a known operational characteristic of long-running Node.js services
+  against MongoDB Atlas. Worth including as a limitation/operational
+  consideration in the dissertation's discussion of production-
+  readiness - a real cloud-native gotcha not specific to any one of the
+  three architectures being compared.
+- **Stage:** cross-cutting (applies to all three architectures' Atlas
+  connections; this occurrence happened on Baseline specifically, but
+  the underlying cause is not Baseline-specific).
