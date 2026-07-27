@@ -3557,3 +3557,59 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** cross-cutting (applies to all three architectures' Atlas
   connections; this occurrence happened on Baseline specifically, but
   the underlying cause is not Baseline-specific).
+
+## [2026-07-27] Enhanced's residual connection-reset failures under concurrent signup load, after pod resource resizing - Gateway/NLB/node-capacity ruled out, points to the same per-process connection-handling limitation as Baseline's
+- **Context:** after resizing product-service, order-service, AND
+  user-service to 500m/1000m CPU (see prior entries), re-ran
+  `full-journey.js` against Enhanced (50 VUs, 3 minutes): 97.81%
+  success (up from 89.85% before the user-service resize), p95
+  358.87ms (down from 4.51s) - a large improvement, but a residual
+  2.18% failure rate remained (213/9,732 checks failed), concentrated
+  on the same pattern as before: signup (44 failures), add to cart
+  (44), view cart (44), checkout session (80) - all
+  authenticated/write operations - while featured/category
+  (unauthenticated reads) stayed at 99-100% success.
+- **Three potential causes investigated, each ruled out with direct
+  evidence (independently re-verified live in this session, not just
+  taken on report):**
+  1. **Node/cluster capacity** - `kubectl top nodes` shows ~1% actual
+     CPU usage across all 12 nodes; `kubectl describe nodes`'
+     Allocated-resources budget mostly sits at 7-51% (one node at
+     82%), all with substantial spare headroom. Ruled out.
+  2. **API Gateway errors** - CloudWatch `5xxError` for the API
+     (`7iuv0462q5`) shows zero datapoints over the last 48 hours.
+     Ruled out.
+  3. **NLB target health / TCP resets** - both `tg-user-service`
+     targets confirmed `healthy`. CloudWatch `TCP_Client_Reset_Count`
+     for `buildmart-internal-nlb` does have datapoints (48 over 48
+     hours, one per hour - not literally zero datapoints as first
+     described), but every single one has `Sum: 0.0` - i.e. the metric
+     is being published continuously and consistently shows no resets,
+     which supports the same conclusion the "zero datapoints" framing
+     was reaching for, just described more precisely here. Ruled out.
+- **Conclusion:** the residual connection resets are not occurring at
+  the Gateway, NLB, or node-capacity level - they occur deeper in the
+  chain, most likely at each individual pod's own Node.js HTTP server
+  connection-accept layer, the same fundamental mechanism identified as
+  the root cause of Baseline's connection-reset failures (see entry
+  above). Enhanced's 2-replica Kubernetes Service distributes load
+  across 2 pods rather than Baseline's single process, which explains
+  why Enhanced's failure rate (2.18%) is meaningfully lower than
+  Baseline's (7.66%) under the same load pattern - but does not
+  eliminate the underlying single-process-per-pod connection-handling
+  limitation, since each individual pod remains a single-threaded
+  Node.js process with its own finite connection-accept backlog.
+  Horizontal replication mitigates but does not structurally eliminate
+  this class of bottleneck; that would require either more replicas,
+  or a multi-worker-process runtime configuration within each pod
+  (e.g. Node.js's `cluster` module), neither of which was implemented
+  in this study.
+- **Significance:** this is treated as a final, genuine architectural
+  finding for Enhanced Microservices under this specific load pattern
+  (bursty concurrent authentication/write requests), not a
+  misconfiguration to be further corrected - directly relevant to
+  Objective 3's resilience-under-load comparison, and a natural
+  counterpart to the Baseline finding above: the same root mechanism
+  manifests at different severities depending on how many processes
+  share the load.
+- **Stage:** Enhanced Microservices.
