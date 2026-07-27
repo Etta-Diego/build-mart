@@ -34,7 +34,7 @@ spec:
             # replaced with frontend-enhanced's real deployment URL once
             # known. See docs/DECISION_LOG.md.
             - name: CLIENT_URL
-              value: "http://localhost:5173"
+              value: "https://d1iyf15c0shdw7.cloudfront.net"
           envFrom:
             - secretRef:
                 name: user-service-secrets

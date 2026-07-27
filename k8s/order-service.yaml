@@ -34,7 +34,7 @@ spec:
             # replaced with frontend-enhanced's real deployment URL once
             # known. See docs/DECISION_LOG.md.
             - name: CLIENT_URL
-              value: "http://localhost:5173"
+              value: "https://d1iyf15c0shdw7.cloudfront.net"
             # In-cluster Service DNS names - resolve via k8s' internal DNS
             # once the corresponding manifests are applied to this namespace.
             - name: CART_SERVICE_URL
