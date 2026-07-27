@@ -68,7 +68,7 @@ export default function () {
   let productId = null;
   if (res.status === 200) {
     const body = JSON.parse(res.body);
-    const products = body.products || body;
+    const products = body.data || body.products || body;
     if (Array.isArray(products) && products.length > 0) {
       productId = products[0]._id;
     }
