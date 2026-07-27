@@ -424,6 +424,90 @@ matched test run, to allow a genuinely apples-to-apples comparison.
 ## 7. WebPageTest Geographic Latency
 (pending)
 
+## 8. Inter-Service Communication Latency
+
+### Enhanced Microservices - order-service to cart-service (clearCart)
+
+Methodology: temporary timing instrumentation added around the
+internal fetch() call in
+services/order-service/src/lib/cartServiceClient.js. Deployment was
+verified BEFORE measurement: both running order-service pods confirmed
+to have image digest
+sha256:6fbccb363b9af51a4d11727d114720da98bcb7733e9a9ab65e8dc27374baf286
+(via kubectl get pods -o jsonpath), and the instrumented code was
+directly confirmed present in the running container via kubectl exec
+grep, before any checkout was performed. This call travels entirely
+within the EKS cluster's internal network (Kubernetes Service
+networking), not through the API Gateway/NLB/VPC Link.
+
+| Call | Latency (ms) |
+|------|--------------|
+| 1 | 79 |
+| 2 | 12 |
+| 3 | 9 |
+| 4 | 10 |
+| 5 | 28 |
+| 6 | 12 |
+| 7 | 12 |
+| 8 | 13 |
+| 9 | 15 |
+| 10 | 11 |
+
+Median: 12ms. Average (excluding first-call outlier, likely connection
+warm-up): 13.6ms. Average (all 10 samples): 20.1ms.
+
+### Baseline Microservices - order-service to cart-service (clearCart)
+
+Methodology: same instrumentation pattern, measuring the same
+clearCart() call, but this call travels over the public internet
+between two separate EC2 instances (order-service at 15.236.249.159,
+cart-service at 13.37.226.159), both within the same AWS region
+(eu-west-3). Deployed and verified via pm2 restart + git log
+confirmation before measurement.
+
+| Call | Latency (ms) |
+|------|--------------|
+| 1 | 10 |
+| 2 | 6 |
+| 3 | 5 |
+
+Median: 6ms.
+
+### Comparison and Interpretation
+
+| Architecture | Call path | Median latency |
+|---|---|---|
+| Enhanced | Internal K8s cluster network (Service/kube-proxy/DNS) | 12ms |
+| Baseline | Direct EC2-to-EC2, same AWS region | 6ms |
+
+Counter-intuitively, Baseline's cross-instance call was faster than
+Enhanced's internal cluster call in this sample. This is plausibly
+explained by two factors: (1) both Baseline EC2 instances reside in
+the same AWS region, and AWS's internal backbone network between
+same-region instances can be extremely fast even when addressed via
+public IPs, since traffic may not traverse the actual public internet
+at all; and (2) Kubernetes Service networking (DNS resolution,
+kube-proxy/iptables rules, CNI overhead) introduces genuine processing
+steps that a direct HTTP connection between two EC2 instances does
+not incur. This suggests that architectural abstraction layers
+(Kubernetes Services) can introduce measurable overhead even for
+communication that nominally stays "internal," and that raw network
+topology (same-region EC2) can outperform orchestrated internal
+networking for simple point-to-point calls. Sample sizes remain
+modest (10 and 3 measurements respectively) - this finding should be
+treated as indicative rather than conclusive, and would benefit from
+a larger sample size in future work.
+
+Note: temporary timing instrumentation was added, verified deployed,
+measured, then removed on both branches. All measurements in this
+section have confirmed deployment provenance (image digest / commit
+SHA verified before data collection); Enhanced's provenance claim was
+independently re-verified via kubectl during this session (live pod
+image digest and in-container instrumented source line both matched
+exactly). Baseline's provenance claim relies on the deploying
+operator's account - SSH access was not available in this session to
+independently re-verify it the same way.
+
 ---
 
 Note: this file is a working log, updated as tests run. Final 
