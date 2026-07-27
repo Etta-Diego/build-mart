@@ -2904,3 +2904,40 @@ Written for direct reuse in the dissertation's methodology chapter.
   and this fix is at risk of the same stale-file confound and should be
   treated as unreliable, not just this one gzip test.
 - **Stage:** Baseline Microservices.
+
+## [2026-07-27] Real Stripe payment completion in full-journey.js scoped out - Checkout Sessions cannot be completed server-side, by design
+- **Context:** attempted to include real Stripe payment completion (5%
+  of virtual users) in the full-journey k6 script
+  (`k6-tests/full-journey.js`), to measure genuine end-to-end checkout
+  performance rather than stopping at checkout-session creation.
+- **What was discovered:** Stripe Checkout Sessions deliberately cannot
+  be completed via any server-side API call - `payment_status` only
+  transitions to `"paid"` after a browser actually renders Stripe's
+  hosted checkout page and submits payment details. This is a
+  PCI-compliance design choice with no server-side bypass; Stripe's own
+  `payment_intent_data` parameter (initially considered as a possible
+  workaround) only configures a PaymentIntent that gets created later -
+  it does not trigger eager creation, and does not change when
+  `payment_status` can transition to `paid`.
+- **Confirmed via:** reading `checkoutSuccess`'s implementation
+  (`services/order-service/src/controllers/payment.controller.js`),
+  which independently re-verifies `payment_status` with Stripe
+  (`stripe.checkout.sessions.retrieve(sessionId)`) rather than trusting
+  the client's claim that payment succeeded - correct, secure design,
+  but it closes off any workaround that relies on calling
+  `checkout-success` directly without a real completed payment.
+- **Alternative considered, scoped out:** browser automation
+  (`xk6-browser`/Playwright) driving Stripe's actual hosted checkout
+  page would genuinely work, but was scoped out given time constraints
+  relative to the project timeline. Remains a viable future-work item
+  if end-to-end payment-inclusive load testing is revisited.
+- **Final approach:** `full-journey.js` measures the complete backend
+  journey (signup, browse, cart, checkout-session creation) without
+  completing final payment - exercising cart lookup, pricing
+  calculation, coupon validation, and Stripe API integration (the
+  substantive backend logic) without the browser-only payment step.
+  This is consistent with the study's Limitations (Section 1.6)
+  framework of naming genuine scope constraints rather than working
+  around them.
+- **Stage:** Baseline Microservices (the script this concerns currently
+  only exists on this branch).
