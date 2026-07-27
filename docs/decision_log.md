@@ -2941,3 +2941,69 @@ Written for direct reuse in the dissertation's methodology chapter.
   around them.
 - **Stage:** Baseline Microservices (the script this concerns currently
   only exists on this branch).
+
+## [2026-07-27] Full-journey load test reveals a genuine single-process connection-handling bottleneck on Baseline's user-service - not a resource/compute issue
+- **Context:** ran `full-journey.js` against Baseline (50 VUs, 3
+  minutes) after the email-collision fix (commit 3821c1b). Result,
+  reported directly (this session had no terminal access to the run
+  itself, so the figures below are taken from pasted raw output, not
+  independently re-executed):
+  - `checks_total`: 7,842; `checks_succeeded`: 92.33% (7,241);
+    `checks_failed`: 7.66% (601). Internally consistent
+    (7,241 + 601 = 7,842).
+  - Per-check breakdown: signup 88% (1,163/1,307 succeeded, 144
+    failed); add-to-cart, view-cart both showing exactly 144 failures;
+    checkout-session 169 failures (87%). The exact 144-failure match
+    across signup/add-to-cart/view-cart is consistent with
+    `full-journey.js`'s actual logic - if signup fails, `token` stays
+    `null`, and every subsequent authenticated call in that same
+    iteration then fails too (a cascade from one root failure per
+    iteration, not four independent failure modes).
+  - All 144 signup failures showed the identical error:
+    `read tcp [client-ip]:[port]->35.181.186.152:5002: read:
+    connection reset by peer`.
+  - Server-side (via `pm2 status` on the user-service EC2 instance,
+    reported by the operator - not independently re-verified in this
+    session): `mode: fork` (single process, no clustering), ~0.3% CPU
+    at rest, no elevated CPU observed during the test. No MongoDB or
+    Redis errors logged during or after.
+- **Root cause, and what independently corroborates it:** checked
+  `services/user-service/src/models/user.model.js` directly - the
+  password pre-save hook calls `bcrypt.genSalt(10)` /
+  `bcrypt.hash(...)` from the **bcryptjs** package (this project's
+  fixed choice per CLAUDE.md: `bcryptjs + jsonwebtoken`). Unlike native
+  `bcrypt` (C++ bindings, offloaded to libuv's thread pool), `bcryptjs`
+  is a pure-JavaScript implementation - its `async`-shaped API does
+  not truly parallelize the hashing work off the main thread. Under 50
+  concurrent signups hitting a single `pm2 fork`-mode (single-process,
+  single-event-loop) instance, repeated cost-factor-10 bcrypt hashing
+  can back up the event loop enough that the OS-level TCP accept queue
+  fills and new/pending connections are reset - consistent with low
+  *average* CPU (brief, serialized bursts rather than sustained load)
+  and with the error being isolated to signup specifically (the one
+  endpoint that calls `bcrypt.hash`; login's `bcrypt.compare` is
+  cheaper and no comparable failures were reported there).
+- **Why this is architectural, not a resource-sizing issue:** unlike
+  the MongoDB Atlas connection-limit and ElastiCache CPU findings
+  elsewhere in this log, this is not something a bigger instance size
+  alone fixes - `pm2 fork` mode is inherently single-process. The
+  standard mitigation (`pm2 cluster` mode, or moving the hashing off
+  the main thread) would itself be an architectural change, not a
+  sizing one.
+- **Significance for the dissertation:** a genuine, structural
+  difference between all three architectures under concurrent
+  checkout-flow load: Monolith (single process, but no network hop to
+  a separate auth service - the whole request path is in one process)
+  and Enhanced (multiple pod replicas per service, load-balanced by
+  Kubernetes) do not share this specific bottleneck, for different
+  reasons. Baseline's un-orchestrated, single-instance-per-service
+  topology has a structural ceiling on concurrent connection handling
+  that this test surfaced directly.
+- **Verification caveat:** the raw k6 output and the `pm2 status`
+  server-side evidence were reported by the operator, not captured or
+  re-run by this session directly (no terminal/SSH access to the
+  instance in this session) - the internal-consistency checks above,
+  and the `bcryptjs` mechanism, were independently verified from the
+  actual pasted numbers and the actual tracked source code,
+  respectively.
+- **Stage:** Baseline Microservices.
