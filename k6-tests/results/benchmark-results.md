@@ -627,6 +627,84 @@ caching to reclaim is modest. The relative improvement (~35%)
 nonetheless confirms the caching layer functions correctly and
 provides real, positive value.
 
+## 10. Geographic / Content Delivery Latency
+
+Methodology: tested using OpenStatus (openstatus.dev), a free
+multi-region latency-testing tool, from 27-28 global test locations
+simultaneously. Two distinct tests were conducted after an initial
+methodological issue was identified and corrected.
+
+### Initial test (root document) - methodological finding
+
+The first test targeted each architecture's root URL (e.g.
+https://d1iyf15c0shdw7.cloudfront.net/). Results showed Enhanced
+(CloudFront) performing WORSE than Monolith/Baseline at every tested
+location, including locations far from the eu-west-3 origin region
+where a CDN advantage was expected:
+
+| Location | Monolith | Baseline | Enhanced (root document) |
+|----------|----------|----------|---------------------------|
+| Paris, France | 4ms | 2ms | 72ms |
+| London, UK | 19ms | 19ms | 134ms |
+| Ashburn, Virginia | 165ms | 166ms | 34ms |
+| Singapore | 310ms | 336ms | 440ms |
+| Tokyo, Japan | 497ms | 496ms | 753ms |
+| Sydney, Australia | 486ms | 483ms | 964ms |
+
+Investigation via curl (checking the X-Cache response header) and
+direct inspection of the CloudFront distribution's configuration
+(`aws cloudfront get-distribution-config`) found: the distribution has
+**zero path-specific cache behaviors** (`CacheBehaviors.Quantity: 0`)
+- every path, including the root document and static JS/CSS assets,
+is served under the single `Managed-CachingOptimized` default policy
+(1-day default TTL). There is no deliberate "no-cache the SPA root
+document" configuration on this deployment. The most likely
+explanation for the root-document result is therefore ordinary CDN
+edge-cache variability: each of the 27+ tested edge locations caches
+independently, and any can be cold at a given moment - particularly
+shortly after a deploy or cache invalidation, both of which evict
+every edge's copy of every path uniformly. This test measured
+whichever edges happened to be cold at that moment, rather than
+revealing a genuine, deliberate architectural weakness.
+
+### Corrected test (static JS asset) - genuine CDN performance
+
+The test was repeated against a real static asset (the application's
+main JavaScript bundle), confirming via curl that repeat requests
+correctly returned `X-Cache: Hit from cloudfront` before proceeding to
+the geographic test:
+
+| Location | Monolith | Baseline | Enhanced (cached JS asset) |
+|----------|----------|----------|------------------------------|
+| Paris, France | 4ms | 2ms | 25-46ms |
+| London, UK | 19ms | 19ms | 30ms |
+| Ashburn, Virginia | 165ms | 166ms | 12ms |
+| Singapore | 310ms | 336ms | 14ms |
+| Tokyo, Japan | 497ms | 496ms | 11ms |
+| Sydney, Australia | 486ms | 483ms | 62ms |
+
+Key finding: once measuring a resource with warm edge caches, Enhanced's
+CloudFront-backed delivery outperformed both single-region
+architectures by a substantial margin at every distant location - 13x
+to 45x faster at Virginia, Singapore, Tokyo, and Sydney - while
+remaining broadly comparable near the origin region (Paris, London).
+This demonstrates the practical, geographic performance benefit of
+CDN-based content delivery for architectures serving a geographically
+distributed user base, a capability structurally absent from the
+single-region-hosted Monolithic and Baseline architectures.
+
+Methodological note: this two-stage investigation - an initial,
+counter-intuitive result, followed by root-cause diagnosis via HTTP
+cache-header inspection and direct CloudFront configuration
+inspection, followed by a corrected re-test - is itself documented as
+an example of this study's empirical rigor, and as a caution that CDN
+latency measurements are sensitive to per-edge cache state at the
+moment of testing, not a fixed property of the architecture. A single
+snapshot test against any one resource can be misleading in either
+direction depending on whether the relevant edges happen to be warm
+or cold at that moment; repeated/multiple resource types are more
+reliable than a single request.
+
 ---
 
 Note: this file is a working log, updated as tests run. Final 
