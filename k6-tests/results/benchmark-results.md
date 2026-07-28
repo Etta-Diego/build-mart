@@ -591,6 +591,42 @@ exactly). Baseline's provenance claim relies on the deploying
 operator's account - SSH access was not available in this session to
 independently re-verify it the same way.
 
+## 9. Caching Effectiveness (Enhanced Microservices - product-service)
+
+Methodology: tested GET /api/products/featured (a Redis cache-aside
+pattern with 300s TTL, confirmed via source inspection of
+product.controller.js). The Redis key (featured_products) was
+explicitly deleted before each cache-miss measurement (via a temporary
+redis-cli pod), guaranteeing a genuine cold-cache read from MongoDB.
+Subsequent requests within the same TTL window were served from
+Redis. All measurements taken from the in-region EC2 runner to avoid
+local network variance (a confound discovered and corrected during
+this test - initial measurements from a residential connection showed
+erratic, clearly-invalid readings of 3-28 seconds, later confirmed to
+be local network instability, not application or cache behavior, once
+the same test was repeated cleanly from the runner).
+
+| Type | Sample 1 | Sample 2 | Sample 3 | Sample 4 | Average |
+|------|----------|----------|----------|----------|---------|
+| Cache MISS (cold, key deleted) | 90.4ms | 79.9ms | 91.8ms | 93.8ms | 89.0ms |
+| Cache HIT (warm, within TTL) | 59.5ms | 57.3ms | 54.9ms | 59.6ms | 57.8ms |
+
+Result: Redis caching provided a consistent ~35% latency reduction
+(89.0ms -> 57.8ms average, ~31.2ms saved per request) for the
+featured-products endpoint. This is a modest but genuine, measurable
+performance benefit, directly supporting Advantage (iii) claimed in
+the methodology (Section 3.3.5): "the Redis caching layer intercepts
+frequently accessed data before it reaches the underlying databases,
+reducing redundant database round-trips." The magnitude of improvement
+is smaller than some published benchmarks report (which often measure
+larger, more complex queries or higher-latency database backends) -
+this is consistent with MongoDB Atlas already being a fast,
+well-indexed managed service for this specific, relatively small query
+(featured products only), meaning the absolute headroom available for
+caching to reclaim is modest. The relative improvement (~35%)
+nonetheless confirms the caching layer functions correctly and
+provides real, positive value.
+
 ---
 
 Note: this file is a working log, updated as tests run. Final 
