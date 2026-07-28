@@ -3613,3 +3613,38 @@ Written for direct reuse in the dissertation's methodology chapter.
   manifests at different severities depending on how many processes
   share the load.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-28] bcryptjs replaced with native bcrypt in Enhanced's user-service - Enhanced-only fix, introduces a named cross-architecture confound
+- **Decision:** replaced `bcryptjs` with native `bcrypt` (upgraded to
+  6.0.0 during implementation - see below) in Enhanced Microservices'
+  user-service only. This directly targets the root cause identified in
+  the full-journey investigation above: bcryptjs's pure-JS hashing blocks
+  Node's single event loop under concurrent signup load, causing
+  connection resets.
+- **Scope, deliberately limited to Enhanced:** Monolith (`backend/`) and
+  Baseline (`services/user-service/` on `baseline-microservices`) are
+  NOT changed. This is a deliberate methodological choice, not an
+  oversight - the fix is being evaluated in isolation on the one
+  architecture where the investigation was performed, rather than
+  silently applied everywhere before its effect is actually measured.
+- **Version note:** the originally planned `bcrypt@^5.1.1` was rejected
+  after `npm audit` found 7 vulnerabilities (6 high, 1 critical) in its
+  `@mapbox/node-pre-gyp`/`tar` install-time toolchain (not runtime code).
+  Upgraded to `bcrypt@6.0.0`, which introduces zero new vulnerabilities
+  in the production (`--omit=dev`) install. Verified before deployment:
+  native binary loads with no source compilation required on
+  `node:20-alpine`, and a functional hash/compare round-trip succeeds.
+- **Named confound - stated limitation for cross-architecture
+  comparison:** because this fix exists ONLY on Enhanced, any
+  improvement in Enhanced's full-journey auth-success rate measured
+  after this change is **partly attributable to this library swap, not
+  purely to architecture**. When Enhanced's auth success rate is
+  compared against Baseline's (still on `bcryptjs`) or Monolith's, this
+  must be stated as a limitation, not presented as a clean
+  architecture-only comparison - Baseline and Monolith retain the
+  original bcryptjs behavior and would likely show the same underlying
+  event-loop-blocking issue if tested under equivalent concurrent
+  signup load.
+- **Stage:** Enhanced Microservices only (explicitly not cross-cutting -
+  see confound above for why this must not be generalized to the other
+  two architectures without being named as such).
