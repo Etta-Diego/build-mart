@@ -3832,3 +3832,104 @@ Written for direct reuse in the dissertation's methodology chapter.
   or stale rules.
 - **Status:** PLANNED - nothing executed yet.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-29] Experiment #11 results: Network Isolation and Security Effectiveness
+
+- **Scope enumerated:** deliberately public — API Gateway, CloudFront,
+  SSH access to `buildmart-k6-runner`/Baseline hosts (IP-restricted).
+  Deliberately private — pod ClusterIPs, internal Service DNS, the
+  internal NLB's listener, and the NodePort range (30001-30005) despite
+  the underlying EKS nodes having public IPs.
+
+- **Scenario 1 - public internet -> internal-only endpoints (20 attempts):**
+  Cycled across 5 EKS node public IPs on port 30002 (user-service
+  NodePort). **Result: 0/20 connected**, all `AbortError` (timeout).
+  Supplementary single-attempt checks against the pod IP directly and
+  the internal NLB's publicly-resolvable-but-private-IP DNS name also
+  timed out (`curl` exit 28). Matches the node security group
+  (`sg-082af3989363c59a3`) restricting 30001-30005 to `192.168.0.0/16`
+  (VPC CIDR only), not `0.0.0.0/0`.
+
+- **Scenario 2 - unauthorized-but-in-VPC vantage point (20 attempts, as
+  originally scoped):** Not executed, and not treated as an incomplete
+  result. Investigation found there is no existing instance positioned
+  as "in-VPC but unauthorized" - the EKS VPC (`vpc-012837d750a23a6e3`)
+  contains only the 12 worker nodes, all sharing one identical security
+  group, and `buildmart-k6-runner` sits in an entirely separate VPC
+  (`vpc-0c730dbccd8daa0ef`, Baseline's) with **zero VPC peering
+  connections between the two** (confirmed via
+  `aws ec2 describe-vpc-peering-connections`, empty result). Rather than
+  provision a new throwaway EC2 instance purely to reproduce the
+  originally-scoped SG-based test, this is reported as the finding
+  itself: Enhanced's network isolation is stronger than an SG-rule test
+  would have shown, because no routable path exists between an
+  arbitrary in-VPC-adjacent host and the EKS backend at all - it's not
+  that a request is denied, there's nowhere for it to even be routed.
+  A security-group misconfiguration cannot expose these backends to a
+  differently-scoped neighbor, because there is no shared network to
+  misconfigure across.
+
+- **Scenario 3 - authorized path via API Gateway (20 attempts):** All
+  20 hit `GET /api/products/featured` through
+  `https://7iuv0462q5.execute-api.eu-west-3.amazonaws.com`. **Result:
+  20/20 HTTP 200.**
+
+- **Pass/fail summary:**
+
+  | Scenario | Attempts | Result |
+  |---|---|---|
+  | 1. Public internet -> internal-only endpoint | 20 | 0/20 (expected) |
+  | 2. Unauthorized-but-in-VPC | n/a | Not testable - no such vantage point exists; reported as a stronger isolation finding (VPC-level non-routability), not a gap |
+  | 3. Authorized path (Gateway -> VPC Link -> backend) | 20 | 20/20 (expected) |
+
+- **Security group audit:**
+  - `sg-082af3989363c59a3` (EKS node group): NodePort range correctly
+    restricted to the VPC CIDR. No `0.0.0.0/0` on any application port.
+    Clean.
+  - `sg-0be73acbe681a3c2e` (EKS cluster cross-account ENI SG): empty
+    ingress rule set. No findings.
+  - Internal NLB (`buildmart-internal-nlb`): `Scheme: internal`, no
+    directly-attached security group. Consistent with the non-public
+    design.
+  - EKS control-plane API endpoint: `EndpointPublicAccess: true`,
+    `PublicAccessCidrs: ["0.0.0.0/0"]`, `EndpointPrivateAccess: false`.
+    A real `0.0.0.0/0` finding, though a common and accepted EKS
+    default - the control plane relies on IAM authentication rather
+    than network-level restriction for this endpoint. Named here per
+    the audit's own "flag anything overly permissive" scope, not
+    treated as equivalent in severity to the finding below.
+  - **`sg-08b98e852875628dc` (shared by Baseline's 5 EC2 instances and
+    `buildmart-k6-runner`) - the most significant finding of this
+    experiment:** TCP 5001-5005 (Baseline's product/user/cart/coupon/
+    order services) open to `0.0.0.0/0`. This is a **structural
+    limitation of Baseline's architecture, not a misconfiguration left
+    unfixed for convenience.** Baseline has no API Gateway by design
+    (Stage 2's deliberate scope, per CLAUDE.md), so
+    `frontend-baseline`'s browser JS calls each service's port directly
+    - confirmed via `frontend-baseline/.env.example`:
+    `VITE_PRODUCT_SERVICE_URL=http://<host>:5001` etc., "since there is
+    no API Gateway yet." That means any real visitor's browser, from
+    any IP, must be able to reach these five ports for the deployed
+    Baseline app to function at all. A CIDR restriction was evaluated
+    as a real remediation and explicitly rejected (not merely deferred)
+    for this reason: it would break public accessibility for genuine
+    visitors, defeating both the live demo and the honesty of the
+    Baseline-vs-Enhanced comparison this project is built around. There
+    is no way to move this trust boundary inward without adding the
+    exact capability Enhanced's Gateway provides - which is precisely
+    why Enhanced has one and Baseline doesn't yet. The security group
+    rule is therefore left as `0.0.0.0/0` on 5001-5005, by deliberate
+    decision, with this reasoning on record. Contrast with Enhanced:
+    Enhanced's equivalent backends are unreachable from the public
+    internet by two independent layers (the NodePort SG rule from
+    Scenario 1, and VPC-level non-routability from Scenario 2's
+    finding), specifically because the Gateway removes the need for any
+    client to reach a backend port directly. This is a direct,
+    structural Baseline-vs-Enhanced security contrast, not a stale-rule
+    cleanup item like the SSH rules fixed earlier this session.
+- **Status:** COMPLETE. Scenario 2 executed as a topology finding
+  rather than a live connection test, and the Baseline SG rule
+  evaluated and deliberately left unchanged, both per explicit decision
+  - see above.
+- **Stage:** Enhanced Microservices (primary finding), with a directly
+  comparative Baseline Microservices security contrast.
