@@ -3724,3 +3724,96 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Enhanced Microservices only (same scope caveat as the fix
   itself - this validates the fix's effect on Enhanced specifically, not
   a cross-architecture claim).
+
+## [2026-07-29] Planned: 12 cloud-native capability experiments, scoped independently of the ongoing user-service 503 investigation
+
+- **Decision:** paused the user-service 503 root-cause investigation
+  (API Gateway access logging + Autocannon sweep, still pending) to run
+  12 independent cloud-native capability experiments in parallel, since
+  none of them depend on that investigation's outcome - they exercise
+  deployment mechanics, HPA, self-healing, load balancing, caching, CDN,
+  and network isolation, not the signup/auth request path where the
+  residual 503s live.
+- **The 12 experiments, with the primary technology each demonstrates:**
+  1. Zero-Downtime Deployment - Kubernetes Rolling Updates
+  2. Deployment Automation Time - GitHub Actions CI/CD
+  3. Autoscaling Responsiveness - Kubernetes HPA
+  4. Self-Healing Time - Kubernetes Recovery
+  5. Mean Time To Recovery - Fault Recovery
+  6. Load Balancing Effectiveness - ALB/Kubernetes Service
+  7. Resource Elasticity - Auto Scaling
+  8. Cache Effectiveness - Redis/ElastiCache
+  9. CloudFront Geographic Performance - CDN
+  10. Fault Isolation - Microservice Independence
+  11. Network Isolation and Security Effectiveness - VPC/Subnets/SGs
+  12. Network Communication Efficiency - Private Networking
+- **Deliberate test-design constraint:** experiments #1, #3, #5, and #7
+  use `read-heavy.js` as the load generator, not `full-journey.js` -
+  full-journey.js includes signup, which carries the known ~1.5-2%
+  residual failure rate from the still-open 503 investigation. Reusing
+  it here would risk misattributing that known, unrelated issue to
+  whatever each of these experiments is actually trying to measure
+  (e.g. a dip during a rolling-update test being wrongly blamed on the
+  deployment mechanism itself). This mirrors the same
+  confound-avoidance discipline already established elsewhere in this
+  project (e.g. keeping the four performance optimizations applied
+  uniformly across stages, isolating the bcrypt fix to one architecture
+  before drawing conclusions).
+- **Execution order, by shared setup cost rather than by number:**
+  cheap/no-load-generation experiments first (#6, #11, #12), then
+  cache/CDN (#8, #9), then the k6-driven batch requiring
+  buildmart-k6-runner plus parallel kubectl watching (#1, #3, #4, #5,
+  #7), then the two requiring either historical CI data or a deliberate
+  outage (#2, #10) last.
+- **Known prerequisite:** #6 (Load Balancing Effectiveness) requires a
+  small, temporary code change first - a response header exposing
+  `process.env.HOSTNAME` on one lightweight endpoint, so individual
+  responses can be attributed to a specific pod. This is the only
+  experiment on this list requiring an application change; all others
+  are read-only against the already-live deployment.
+- **Status:** PLANNED - nothing in this list has been executed yet.
+  The 503 investigation (API Gateway access logging + Autocannon sweep)
+  remains open and will resume once this batch is complete or as
+  capacity allows, since the two efforts don't block each other.
+- **Stage:** Enhanced Microservices.
+
+## [2026-07-29] Finalized sample-size methodology and Enhanced-only scoping for the 12 cloud-native capability experiments
+
+- **Recommended runs per experiment:**
+
+  | # | Experiment | Recommended runs |
+  |---|---|---|
+  | 1 | Zero-Downtime Deployment | 10 deployments |
+  | 2 | Deployment Automation Time | 10 pipeline executions |
+  | 3 | Autoscaling Responsiveness | 5-10 load tests |
+  | 4 | Self-Healing Time | 10 pod failures |
+  | 5 | Mean Time To Recovery | 10 failure-recovery cycles |
+  | 6 | Load Balancing Effectiveness | 3-5 load tests, >=200 requests each |
+  | 7 | Resource Elasticity | 5 distinct load profiles |
+  | 8 | Cache Effectiveness | 10 cold-cache + 10 warm-cache requests |
+  | 9 | CloudFront Geographic Performance | 30-50 requests per region (6 regions, 300 total) |
+  | 10 | Fault Isolation | 10 failure injections |
+  | 11 | Network Isolation/Security | 20 connection attempts per scenario (unauthorized / authorized / internet) |
+  | 12 | Network Communication Efficiency | 100-1,000 request pairs, internal vs external |
+
+- **Reporting convention:** all results will be reported as mean +/-
+  standard deviation, not single-run figures - matching this project's
+  existing discipline, not a new standard invented for this batch. Prior
+  example already on record: the two independently-run bcrypt validation
+  tests (98.23% and 98.46%, reported as a range/mean rather than citing
+  either run alone - see the bcrypt fix validation entry above).
+- **Enhanced-only scoping, decided explicitly:** experiments #1, #2, #4,
+  and #5 (deployment automation, self-healing, MTTR) will be run on
+  Enhanced only. Baseline and Monolith have no equivalent orchestrated
+  mechanism to measure - no automated rollout, no automatic pod
+  replacement. Rather than construct an artificial equivalent (e.g.
+  manually timing a `pm2 restart` and labeling it "Baseline MTTR"), the
+  absence of these capabilities on Baseline/Monolith will be reported
+  directly as part of the finding itself. This is consistent with how
+  this project already treats Baseline's lack of an API Gateway (CORS
+  handling, shared-secret inter-service trust) as a named architectural
+  contrast rather than something to paper over with a substitute
+  measurement.
+- **Status:** PLANNED - methodology finalized, no experiments executed
+  yet.
+- **Stage:** Enhanced Microservices.
