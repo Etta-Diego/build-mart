@@ -3817,3 +3817,18 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Status:** PLANNED - methodology finalized, no experiments executed
   yet.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-29] PLANNED: Experiment #11 - Network Isolation and Security Effectiveness
+
+- **Decision:** starting experiment #11 from the 12-experiment plan
+  above. Will enumerate the intended public/private boundary (API
+  Gateway, CloudFront, and SSH bastion/runner access deliberately
+  public; pod ClusterIPs, internal Service DNS, and the NLB's internal
+  listener deliberately private), then run 20-attempt connection tests
+  from three vantage points (public internet, an unauthorized-but-
+  in-VPC point if one exists, and the authorized Gateway path), and
+  separately audit every security group attached to the EKS node group,
+  the NLB, and `buildmart-k6-runner` for overly permissive (0.0.0.0/0)
+  or stale rules.
+- **Status:** PLANNED - nothing executed yet.
+- **Stage:** Enhanced Microservices.
