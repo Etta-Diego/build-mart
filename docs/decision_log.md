@@ -4304,3 +4304,43 @@ Written for direct reuse in the dissertation's methodology chapter.
   Experiment 1 not yet executed).
 - **Stage:** Baseline Microservices - Experiment 1, Application Loading
   Performance.
+
+## [2026-07-29] Experiment 1 (Application Loading Performance) completed for Enhanced Microservices - data collection complete across all three architectures
+
+- **Context:** Experiment 1 for the Enhanced Microservices architecture
+  has now been successfully completed, using the identical reusable k6
+  script (`loading-performance.k6.js`) already employed for the
+  Monolith and Baseline runs above, without modification - `executor:
+  "constant-vus"`, `vus: 1`, `duration: "1m"`, requesting
+  `GET /api/products/featured`, with
+  `--summary-trend-stats="avg,min,med,max,p(90),p(95),p(99))"`
+  included in the command from the first execution. The same
+  methodology, executor, VUs, duration, endpoint path, and summary
+  statistics were preserved exactly as used for Monolith and Baseline.
+  The only change between architectures was the deployment endpoint
+  itself - for Enhanced, the public API Gateway
+  (`https://7iuv0462q5.execute-api.eu-west-3.amazonaws.com`) - which
+  preserves methodological consistency rather than breaking it, since
+  varying only the target endpoint while holding script, scenario, and
+  export configuration constant is precisely what makes the three
+  datasets comparable.
+
+- **Outcome:** the Enhanced execution completed successfully (7,934
+  iterations, 0 failed checks) and produced a complete summary
+  including successful/failed requests, average, median, p90, p95,
+  p99, maximum response time, requests/sec, iteration duration, and
+  data sent/received. The researcher reviewed this dataset and
+  accepted it as the official Enhanced dataset for Experiment 1. This
+  was the first accepted Enhanced execution for this experiment, so it
+  supersedes no previous Enhanced run.
+
+- **Data collection status:** Experiment 1 (Application Loading
+  Performance) has now been completed for all three architectures -
+  Monolith, Baseline Microservices, and Enhanced Microservices. Future
+  work on this experiment proceeds to statistical analysis and
+  dissertation reporting rather than additional data collection.
+
+- **Status:** COMPLETE (Monolith, Baseline, and Enhanced - Experiment 1
+  data collection finished across all three architectures).
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - Experiment 1, Application Loading Performance.
