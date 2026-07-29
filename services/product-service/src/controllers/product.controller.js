@@ -18,6 +18,9 @@ export const getAllProducts = async (req, res) => {
 };
 
 export const getFeaturedProducts = async (req, res) => {
+	// TEMPORARY - Experiment #6 (Load Balancing Effectiveness), remove once
+	// pod-distribution data is collected. See docs/decision_log.md.
+	res.setHeader("X-Pod-Name", process.env.HOSTNAME);
 	try {
 		let featuredProducts = await redis.get("featured_products");
 		if (featuredProducts) {
