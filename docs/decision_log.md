@@ -4126,3 +4126,65 @@ Written for direct reuse in the dissertation's methodology chapter.
   change once data is collected.
 - **Status:** PLANNED - nothing executed yet.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-29] Experiment #6 results: Load Balancing Effectiveness
+
+- **Prerequisite:** added a temporary `X-Pod-Name` response header
+  (`process.env.HOSTNAME`) to `GET /api/products/featured`. Verified
+  `HOSTNAME` is actually populated with the pod's own name in this
+  cluster before relying on it (`kubectl exec ... printenv HOSTNAME`
+  returned `product-service-756c8f88dd-lgctc`, matching the pod's real
+  name exactly) - not assumed.
+
+- **Deployment:** reused the exact process already verified for the
+  bcrypt fix rather than improvising a new one - manual build/tag/push,
+  bypassing the push-triggered GitHub Actions pipeline
+  (`.github/workflows/deploy.yml`, which would otherwise rebuild and
+  redeploy all 5 services on any push to `enhanced-microservices`).
+  Built `services/product-service` locally, tagged with the commit SHA
+  (`c1d69811e79fb1ccb966a7fc4c5834637c297b0c`), pushed to ECR, `kubectl
+  set image deployment/product-service`, confirmed via `kubectl rollout
+  status` ("successfully rolled out"). Verified the header actually
+  reaches the client through the full path (API Gateway -> VPC Link ->
+  pod) with two real curl requests before running the experiment,
+  confirming two distinct pod names on repeated calls.
+
+- **Method:** both conditions run via the public API Gateway path (the
+  real client-facing route), from `buildmart-k6-runner`, N=250 each
+  (above the plan's 200 minimum):
+  - **Idle:** k6 `shared-iterations`, 1 VU, sequential.
+  - **Load:** k6 `shared-iterations`, 20 VUs, concurrent burst.
+  2 product-service pod replicas were running throughout
+  (`product-service-5b86c85dd9-fp87z`, `product-service-5b86c85dd9-p59mf`).
+
+- **Results:**
+
+  | Condition | Pod | Count | % |
+  |---|---|---|---|
+  | Idle (N=250) | fp87z | 115 | 46.0% |
+  | Idle (N=250) | p59mf | 135 | 54.0% |
+  | Load (N=250) | fp87z | 124 | 49.6% |
+  | Load (N=250) | p59mf | 126 | 50.4% |
+
+- **Finding, checked rather than eyeballed:** both conditions show a
+  working, roughly even round-robin split across both replicas - no
+  pod was starved or dominant in either condition. Idle's 54/46 split
+  looks like a possible "connection reuse concentrates traffic"
+  pattern at first glance, but checked against the binomial standard
+  error for N=250 at true p=0.5 (~3.16 percentage points), it's only
+  ~1.3 standard errors from even - within ordinary sampling noise, not
+  a compelling signal of a real idle-vs-load difference. Reported as:
+  **no meaningful distribution difference found between idle and load
+  conditions** in this deployment - a valid, honest experimental
+  outcome, not forced into the more dramatic story the plan's own
+  framing anticipated as possible.
+
+- **Cleanup:** reverted the temporary header
+  (`git revert c1d6981`, commit `528b759`), rebuilt, pushed a new
+  ECR-tagged image, redeployed via the same manual process, and
+  confirmed via a real curl request that the header no longer appears
+  in production responses - not left in the codebase or the running
+  deployment.
+
+- **Status:** COMPLETE.
+- **Stage:** Enhanced Microservices.
