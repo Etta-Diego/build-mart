@@ -4107,3 +4107,22 @@ Written for direct reuse in the dissertation's methodology chapter.
   architecture's original, unedited results and its own root-cause note
   on the internal path's connection-warm-up pattern (deferred, not
   dropped).
+
+## [2026-07-29] PLANNED: Experiment #6 - Load Balancing Effectiveness
+
+- **Decision:** starting experiment #6 from the 12-experiment plan,
+  next per the plan's original execution order (cheap/no-load-generation
+  items first; #11 and #12 already complete). Will add a temporary
+  `X-Pod-Name` response header (`process.env.HOSTNAME`) to
+  `GET /api/products/featured` (already used in prior experiments,
+  lightweight and side-effect-free), verify `HOSTNAME` is actually
+  populated in this cluster rather than assuming Kubernetes sets it,
+  deploy via the same build/ECR-push/kubectl-set-image/rollout process
+  already verified for the bcrypt fix, then send >=200 requests via the
+  public API Gateway path both at idle and under a short k6 burst from
+  `buildmart-k6-runner`, recording which pod answers each request. Will
+  report per-pod distribution (counts and percentages) for both
+  conditions explicitly, rather than only one, and revert the header
+  change once data is collected.
+- **Status:** PLANNED - nothing executed yet.
+- **Stage:** Enhanced Microservices.
