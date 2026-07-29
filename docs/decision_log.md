@@ -3648,3 +3648,79 @@ Written for direct reuse in the dissertation's methodology chapter.
 - **Stage:** Enhanced Microservices only (explicitly not cross-cutting -
   see confound above for why this must not be generalized to the other
   two architectures without being named as such).
+
+## [2026-07-29] bcrypt fix validation: initial local re-run discarded (execution-location confound), two corrected re-runs from buildmart-k6-runner show a real, corroborated improvement
+- **Context:** re-ran `full-journey.js` (50 VUs, 3 min, ARCH=enhanced) to
+  measure the effect of the bcryptjs->bcrypt fix logged above. A first
+  attempt was run directly from the local development machine, not from
+  an in-region EC2 instance - a direct violation of this project's own
+  established methodology (see the earlier "in-region EC2 runner" PLANNED
+  entry), which exists specifically to avoid local/residential network
+  variance as a confound.
+- **Discarded data point:** that local run recorded 97.46% success
+  (7,768/7,970), with several `dial tcp ...: connectex` connection-level
+  failures against both `/api/auth/signup` and `/api/products/featured`,
+  and individual iteration durations as high as 27-49s (vs. a normal
+  ~6-7s) - all consistent with local network instability, not the
+  application or the bcrypt fix. This result is recorded here explicitly
+  as a **discarded, non-comparable data point**, not silently dropped
+  from the project's history: it should not be cited as evidence about
+  the bcrypt fix's effect either way.
+- **Corrected re-run (Run 2, this session):** SSH access to
+  `buildmart-k6-runner` (`i-0d3ddc1f0a6f315ac`) was restored (same
+  stale-security-group-IP pattern as prior instances this session -
+  revoked the old rule, authorized the current IP, confirmed with a
+  real SSH connection before proceeding). Confirmed the instance's
+  checked-out `full-journey.js` was byte-identical to the current
+  committed version (after fetching 6 commits it was behind) before
+  making the same temporary `vus:20->50` edit used for this comparison,
+  running the test, then reverting the
+  edit immediately after.
+- **Replica counts, recorded at time of test:** all 5 services confirmed
+  at 2/2 (desired/ready) both immediately before and immediately after
+  the run - no HPA scale event occurred during the test (`user-service`
+  has no HPA at all, so it was structurally fixed at 2 replicas in both
+  the original and this re-run regardless).
+- **Result - a SECOND independent run was also captured** (run by the
+  operator directly, not by this session, immediately after the first,
+  same 50 VU/3 min conditions, same `buildmart-k6-runner` instance):
+  | | Before (bcryptjs) | Run 2 (this session) | Run 3 (operator, independent) |
+  |---|---|---|---|
+  | Overall success | 97.81% (9,519/9,732) | 98.23% (9,712/9,886) | 98.46% (9,748/9,900) |
+  | signup failure rate (per iteration) | 2.71% | 1.58% | 1.82% |
+  | add to cart failure rate | 2.71% | 1.70% | 1.82% |
+  | view cart failure rate | 2.71% | 1.76% | 1.94% |
+  | checkout session failure rate | 4.93% | 5.15% | 3.64% |
+  | Connection-level errors | - | none | none |
+- **Combined result:** success rate improved from 97.81% to a range of
+  98.23%-98.46% across two independent runs, mean ~98.3% - a real,
+  corroborated improvement, not a one-off.
+- **Interpretation:** signup, add-to-cart, and view-cart - the checks
+  that cascade from user-service's signup path - improved meaningfully
+  and consistently in BOTH runs (roughly 1 percentage point each). This
+  internal pattern, replicated independently, is corroborating evidence
+  that the improvement is real and specifically attributable to the
+  bcrypt fix's targeted mechanism (reduced event-loop blocking on
+  user-service), not one-off run-to-run noise.
+- **Checkout session - flagged as unexplained variance, not smoothed
+  over:** relative to the 4.93% baseline, Run 2 moved this check's
+  failure rate *up* (5.15%) while Run 3 moved it *down* (3.64%) - the
+  two post-fix runs disagree with each other about the direction of
+  change on this specific check, and the 1.51pp spread between them is
+  larger than the ~1pp improvement seen on the checks the fix should
+  plausibly affect. Checkout-session depends on order-service/
+  coupon-service, not user-service's password hashing, so under the
+  fix's own mechanism neither run's result is obviously "expected" -
+  this is left as an open question rather than asserted as flat/noise
+  or explained away in either direction. Worth investigating further
+  if checkout-session's behavior becomes relevant to another finding.
+- **Anomaly check:** zero connection-level warnings/errors in either
+  post-fix run's log (vs. multiple in the discarded local run). Run 2's
+  max `iteration_duration` was 7.63s, no outliers. All of Run 2's 26
+  signup failures were individually confirmed as genuine `503 Service
+  Unavailable` responses, not network artifacts. Run 3's raw log was
+  not independently inspected by this session (reported by the
+  operator).
+- **Stage:** Enhanced Microservices only (same scope caveat as the fix
+  itself - this validates the fix's effect on Enhanced specifically, not
+  a cross-architecture claim).
