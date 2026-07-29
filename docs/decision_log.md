@@ -4026,3 +4026,84 @@ Written for direct reuse in the dissertation's methodology chapter.
   investigation - explicitly deferred, not dropped, and recorded here
   as a deliberate scope decision rather than an unnoticed gap.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-29] Experiment #12 extended: Baseline and Monolith Network Communication Efficiency (cross-references the Enhanced-only entry above)
+
+- **Pre-registered checks (done before any load test, per this project's
+  standing discipline):**
+  - **Baseline VPC/subnet check:** Cart Service and Product Service EC2
+    instances share one VPC (`vpc-0c730dbccd8daa0ef`) and subnet
+    (`subnet-0ff155bc986c5a7a4`) - a private-IP path is technically
+    routable. However, the actually-deployed `PRODUCT_SERVICE_URL` on
+    the live cart-service instance is `http://15.188.19.182:5001` - the
+    **public IP**, confirmed by reading the instance's real running
+    config, not assumed. So Baseline's real traffic is public-IP-to-
+    public-IP in production even though nothing at the network layer
+    forces that - it's simply that Stage 2 never introduced an internal-
+    DNS/private-IP convention (consistent with Experiment #11: no
+    gateway, no VPC-private tier). Both the as-configured (public IP)
+    and the technically-available-but-unused private-IP path were
+    measured, rather than fabricating a single "internal" number.
+  - **Monolith code-path check:** `getCartProducts`
+    (`backend/controllers/cart.controller.js:16-33`) is a single
+    in-process function doing one Mongoose call -
+    `Product.find({_id:{$in:productIds}})` - with no separate service to
+    call and no HTTP hop at all. Confirmed via `decision_log.md` that
+    Monolith's MongoDB is Atlas (remote, cloud-hosted, same cluster as
+    every other stage), not a local `mongod` - so this isn't a "zero
+    network" operation, it's "one network hop to Atlas" versus Baseline/
+    Enhanced's "one hop to a service, which itself hops to Atlas." The
+    `Product.find(...)` call itself (not a full authenticated `/api/cart`
+    request, which would bundle in session/auth overhead never measured
+    on the other two architectures either) is the honest comparable
+    unit, and is reported as categorically different from the other
+    rows, not silently equalized.
+
+- **Execution location, confirmed load-bearing for validity (same
+  discipline as the bcrypt-fix k6 reruns):** both the Baseline and
+  Monolith scripts were executed via SSH directly on the calling
+  service's own EC2 instance - Baseline's `buildmart-baseline-cart-
+  service` instance for the Baseline measurements, the Monolith's own
+  `buildmart-monolith` instance for the Monolith measurement - not
+  routed through `buildmart-k6-runner`, and not run from a local
+  machine. This mirrors exactly how the Enhanced measurement was taken
+  (from inside the calling cart-service pod), so all three architectures'
+  numbers reflect the same thing: latency as experienced by the actual
+  calling process, not by a third-party vantage point.
+
+- **Combined results (N=500 each, all measured from inside the calling
+  service's own compute - pod exec for Enhanced, SSH for Baseline/
+  Monolith, matching this project's established execution-location
+  discipline):**
+
+  | Architecture | Path | What's measured | mean (ms) | stddev | p50 | p95 | p99 | max |
+  |---|---|---|---|---|---|---|---|---|
+  | Enhanced | Internal | HTTP, pod->pod, K8s Service DNS (VPC-private) | 13.442 | 24.406 | 6.741 | 59.175 | 92.637 | 397.057 |
+  | Enhanced | External-equivalent | HTTP via public Gateway->VPC Link->same backend | 12.916 | 4.128 | 11.575 | 21.731 | 31.638 | 36.676 |
+  | Baseline | As-configured | HTTP, EC2->EC2, public IP (what's actually deployed) | 5.528 | 4.316 | 4.744 | 8.560 | 14.361 | 93.629 |
+  | Baseline | Same-subnet private IP | HTTP, EC2->EC2, private IP (routable but unused) | 4.812 | 1.746 | 4.228 | 7.586 | 14.263 | 18.826 |
+  | Monolith | In-process lookup | Mongoose `Product.find`, no HTTP hop, Atlas round trip only - not a like-for-like row | 2.678 | 0.975 | 2.493 | 3.915 | 5.151 | 16.291 |
+
+- **Finding, reported as measured:** Monolith's number is the floor for
+  "one Atlas round trip with nothing else added" and is not evidence
+  that Monolith's architecture is "faster at inter-service calls" - it
+  has none. Among the three genuine cross-service HTTP measurements,
+  **Baseline is both fastest and among the most consistent**, despite
+  Experiment #11 already establishing Baseline has no gateway, no
+  isolation tier, and backend ports open to `0.0.0.0/0`. Enhanced's own
+  internal (VPC-private, more secure) path is slower at the tail and far
+  more variable than Baseline's flat EC2-to-EC2 call. This reinforces
+  the standalone Enhanced finding rather than complicating it: network
+  isolation and network performance are separate, independently-moving
+  properties in this deployment - Kubernetes' networking layer adds real
+  overhead and variance versus simple EC2-to-EC2 networking, regardless
+  of which side is more secure. Baseline's own public-vs-private-IP gap
+  (mean +0.716ms, stddev +2.57x when using the public IP) additionally
+  shows that Baseline's "no gateway" choice is not entirely free, just
+  much cheaper than Enhanced's Kubernetes-networking overhead.
+- **Status:** COMPLETE.
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - see the Enhanced-only entry above for that
+  architecture's original, unedited results and its own root-cause note
+  on the internal path's connection-warm-up pattern (deferred, not
+  dropped).
