@@ -4250,3 +4250,57 @@ Written for direct reuse in the dissertation's methodology chapter.
   Experiment 1 not yet executed).
 - **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
   Microservices) - Experiment 1, Application Loading Performance.
+
+## [2026-07-29] Experiment 1 (Application Loading Performance) completed for Baseline Microservices
+
+- **Context:** Experiment 1 for the Baseline Microservices architecture
+  has now been successfully completed, using the same reusable k6
+  script (`loading-performance.k6.js`) and the same methodology as the
+  Monolith run above, without modification - `executor: "constant-vus"`,
+  `vus: 1`, `duration: "1m"`, requesting `GET /api/products/featured`.
+  The only architecture-specific change was the value supplied to
+  `BASE_URL`:
+  ```
+  BASE_URL=http://15.188.19.182:5001
+  ```
+  Scenario, executor, duration, VUs, endpoint path, and workload were
+  all preserved exactly as used for Monolith.
+
+- **Pre-execution verification:** the endpoint was verified before
+  running the test:
+  ```
+  curl -I http://15.188.19.182:5001/api/products/featured
+  ```
+  which returned `HTTP/1.1 200 OK`.
+
+- **Execution:** the k6 command included the standing rule established
+  in the Monolith correction entry above from the first run, so no
+  rerun was necessary this time:
+  ```
+  k6 run \
+    --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+    --summary-export=/tmp/results.json \
+    /tmp/loading-performance.k6.js
+  ```
+  Because `--summary-trend-stats` was included from the start, the
+  exported summary fully satisfied the dissertation's metric
+  requirements (including p99) on the first execution - no rerun was
+  required.
+
+- **Data source:** results were exported to `/tmp/results.json`. The
+  researcher's decision was to treat this exported JSON - not the
+  console/stdout summary - as the authoritative source for extracting
+  dissertation metrics, consistent with the Monolith run's data
+  handling.
+
+- **Outcome:** the Baseline execution completed successfully (70,248
+  iterations, 0 failed checks) and produced a complete summary
+  including successful/failed requests, average, median, p90, p95,
+  p99, maximum response time, requests/sec, iteration duration, and
+  data sent/received. **This dataset is accepted as the official
+  Experiment 1 dataset for the Baseline Microservices architecture.**
+
+- **Status:** COMPLETE (Monolith and Baseline; Enhanced run for
+  Experiment 1 not yet executed).
+- **Stage:** Baseline Microservices - Experiment 1, Application Loading
+  Performance.
