@@ -3933,3 +3933,28 @@ Written for direct reuse in the dissertation's methodology chapter.
   - see above.
 - **Stage:** Enhanced Microservices (primary finding), with a directly
   comparative Baseline Microservices security contrast.
+
+## [2026-07-29] PLANNED: Experiment #12 - Network Communication Efficiency
+
+- **Decision:** starting experiment #12 from the 12-experiment plan
+  above. Will measure a real, already-instrumented internal dependency
+  - Cart Service's `getProductsByIds` call
+  (`POST /api/products/batch`, `{ids: [...]}`) to Product Service -
+  rather than a synthetic call built just for this test. Will compare
+  two paths for the identical request shape and payload: (a) internal,
+  from inside a cart-service pod over Kubernetes Service DNS
+  (`http://product-service:5001`), and (b) external-equivalent,
+  through the public API Gateway
+  (`https://7iuv0462q5.execute-api.eu-west-3.amazonaws.com/api/products/batch`,
+  routed via the Gateway's `ANY /api/products/{proxy+}` route and VPC
+  Link). N=100 minimum per path, per the plan's low end, extending
+  toward 500-1000 if session time allows. Will report p50/p95/p99 and
+  standard deviation for both distributions (not just means), compute
+  the internal/external ratio, and treat the consistency claim
+  (internal path lower variance, not just lower latency) as something
+  requiring its own number rather than an assertion. Explicitly framed
+  as the performance side of the same VPC-private architectural fact
+  experiment #11 already established on the security side - not an
+  unrelated new finding.
+- **Status:** PLANNED - nothing executed yet.
+- **Stage:** Enhanced Microservices.
