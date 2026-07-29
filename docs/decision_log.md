@@ -4188,3 +4188,65 @@ Written for direct reuse in the dissertation's methodology chapter.
 
 - **Status:** COMPLETE.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-29] Methodological correction: Experiment 1 (Application Loading Performance) Monolith run re-executed for missing p99 percentile
+
+- **Context:** Experiment 1 measures application loading performance
+  using one reusable k6 script (`loading-performance.k6.js`) with
+  `executor: "constant-vus"`, `vus: 1`, `duration: "1m"`, requesting
+  `GET /api/products/featured` against a `BASE_URL` supplied via
+  environment variable - identical script and scenario across all
+  three architectures, executed sequentially (Monolith, Baseline
+  Microservices, Enhanced Microservices).
+
+- **Initial issue:** the first Monolith execution used:
+  ```
+  k6 run --summary-export=/tmp/results.json /tmp/loading-performance.k6.js
+  ```
+  This ran to completion successfully (70,540 iterations, 0 failed
+  checks). However, on extracting results, `/tmp/results.json` did not
+  contain the p99 percentile - k6's default summary trend statistics
+  only export avg/min/med/max/p90/p95. Since the dissertation requires
+  reporting p99 for every architecture, this run's results were
+  incomplete for that requirement.
+
+- **Decision:** the original Monolith results are **discarded** and
+  must not be used in the dissertation. This was not a flaw in the
+  experiment, the script, or the methodology - `constant-vus`/`vus:1`/
+  `duration:"1m"` and the endpoint under test were correct throughout.
+  The only problem was that the execution command did not instruct k6
+  to export p99 in its summary.
+
+- **Correction applied:** the researcher identified the gap and applied
+  a minimal, justified correction - rerun only the Monolith execution,
+  with the identical script, endpoint, duration, VUs, executor, and
+  architecture. The sole change was to the execution command:
+  ```
+  k6 run \
+    --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+    --summary-export=/tmp/results.json \
+    /tmp/loading-performance.k6.js
+  ```
+  `--summary-trend-stats` only controls which percentiles k6 computes
+  and includes in its summary output - it does not alter workload
+  generation, request timing, VUs, or duration in any way.
+
+- **Outcome:** the Monolith rerun completed successfully (70,611
+  iterations, 0 failed checks) and produced a complete summary
+  including successful/failed requests, average, median, p90, p95,
+  p99, maximum response time, requests/sec, iteration duration, and
+  data sent/received. **These rerun results are the official Monolith
+  dataset for Experiment 1.** The original (first) Monolith run is
+  superseded and retained only as an audit trail of why the correction
+  was necessary - not as usable experimental data.
+
+- **Standing rule for the remainder of the dissertation:** every future
+  k6 experiment requiring percentile reporting must execute with
+  `--summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)"` included
+  in the command from the first run, to ensure p99 (and all required
+  percentiles) are captured consistently without needing a rerun.
+
+- **Status:** COMPLETE (Monolith only; Baseline and Enhanced runs for
+  Experiment 1 not yet executed).
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - Experiment 1, Application Loading Performance.
