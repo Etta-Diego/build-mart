@@ -458,6 +458,72 @@ p95 2.53s) is superseded by the final result above and no longer
 reported, since it was taken before the resize that materially
 changed both figures.
 
+### Enhanced Microservices - post-bcrypt-fix re-test (2026-07-29)
+
+`bcryptjs` was replaced with native `bcrypt` in Enhanced's user-service
+only (Monolith and Baseline deliberately left unchanged - see
+`docs/decision_log.md` for the full scoping rationale and the resulting
+cross-architecture confound this creates for auth-success-rate
+comparisons). This re-test measures whether that fix changed the
+97.81%-success result above.
+
+**Discarded data point - do not cite:** the first re-test attempt ran
+directly from the local development machine rather than an in-region
+EC2 instance, violating this project's own established k6 methodology
+(tests are meant to run from an in-region EC2 runner specifically to
+avoid local/residential network variance as a confound - see
+`docs/decision_log.md`). That run recorded 97.46% success
+(7,768/7,970), with multiple `dial tcp ...: connectex` connection-level
+failures and individual iteration durations up to 27-49s (vs. a normal
+~6-7s) - consistent with local network instability, not the
+application or the bcrypt fix. It is recorded here, not silently
+dropped, specifically so it isn't later mistaken for evidence that the
+fix made things worse.
+
+**Two independent corrected re-tests, both from `buildmart-k6-runner`**
+(same execution point as the original 97.81% result), replica counts
+confirmed at 2/2 for all 5 services immediately before and after (no
+HPA scale event during either test):
+
+| | Run 2 | Run 3 |
+|---|---|---|
+| Executed by | this session (Claude Code) | operator, independently, immediately after Run 2 |
+| Success rate | 98.23% (9,712/9,886) | 98.46% (9,748/9,900) |
+| Failure rate | 1.76% (174/9,886) | 1.54% (152/9,900) |
+| p95 latency | 372.59ms | 366.31ms |
+| Throughput | 53.32 req/s | 53.38 req/s |
+| Iterations | 1,649 complete, 0 interrupted | 1,650 complete, 0 interrupted |
+| signup failure rate | 1.58% | 1.82% |
+| add to cart failure rate | 1.70% | 1.82% |
+| view cart failure rate | 1.76% | 1.94% |
+| checkout session failure rate | 5.15% | 3.64% |
+| Connection-level errors | none | none |
+
+**Combined result across both runs:** success rate 97.81% -> **98.23%
+- 98.46%, mean ~98.3%** - a consistent, real improvement, corroborated
+independently by a second run executed separately from the first.
+
+**Checkout session - flagged, not smoothed over:** relative to the
+original 4.93% baseline, Run 2 moved checkout-session's failure rate
+*up* (5.15%) while Run 3 moved it *down* (3.64%) - the two post-fix
+runs disagree with each other about the direction of change on this
+one check, and the spread between them (1.51pp) is larger than the
+~1pp improvement seen on signup/add-to-cart/view-cart, the checks that
+actually should move from this fix. This is recorded as **unexplained
+variance on an endpoint the bcrypt fix shouldn't affect** (checkout
+session depends on order-service/coupon-service, not user-service's
+password hashing) rather than asserted as "flat/noise" - a genuine
+open question, not resolved by either run alone.
+
+Full details, including the SG/SSH remediation, byte-for-byte script
+verification on the runner, and the discarded local run below, are in
+`docs/decision_log.md` ("bcrypt fix validation...").
+
+**Reminder on the confound:** this improvement is measured against a
+comparison where only Enhanced received the bcrypt fix. It cannot be
+read as "Enhanced's architecture is more resilient than before" in a
+pure sense - part of it is this library swap, not architecture.
+
 ### Baseline Microservices
 - Total requests: 7,842
 - Success rate: 92.33% (7,241/7,842 checks succeeded)
@@ -486,23 +552,43 @@ changed both figures.
 | Architecture | Success rate | p95 latency | Notes |
 |---|---|---|---|
 | Monolith | 100.00% | 4.87s | Zero failures - single dedicated instance, no network hops, but highest latency |
-| Enhanced | 97.81% | 358.87ms | Best latency by a wide margin; small residual failure rate traced to single-process-per-pod connection handling, partially mitigated by 2-replica load distribution (see decision_log.md) |
-| Baseline | 92.33% | 2.27s | Same root architectural cause as Enhanced's residual failures, but more severe due to single-process (no replication) design |
+| Enhanced | 97.81% (pre-bcrypt-fix) / **~98.3%, range 98.23-98.46%** (post-bcrypt-fix, 2 independent runs, see subsection above) | 358.87ms / 366-373ms | Best latency by a wide margin; residual failure rate traced to single-process-per-pod connection handling, partially mitigated by 2-replica load distribution AND by the bcrypt fix (Enhanced-only - see decision_log.md for the resulting confound) |
+| Baseline | 92.33% | 2.27s | Same root architectural cause as Enhanced's residual failures, but more severe due to single-process (no replication) design, and still on `bcryptjs` (unfixed) |
 
 Key finding: all three architectures were investigated with equal
 rigor, revealing that Node.js's single-process connection-accept
 limitation affects BOTH Baseline and Enhanced under this specific
 bursty-signup load pattern, differing only in severity based on each
 architecture's degree of horizontal replication (Baseline: 1 process,
-7.66% failure; Enhanced: 2 replicas, 2.18% failure). Monolith avoids
-this class of failure entirely since it never proxies signup through
-a network call to a separate service - the entire journey stays
-within one process. This is a genuinely nuanced finding: Enhanced's
-architecture does not eliminate this bottleneck class, but
-demonstrably reduces its severity through replication, while achieving
-dramatically better latency than both other architectures. This
-directly and precisely supports Objective 3's evaluation of resilience
-under load.
+7.66% failure; Enhanced: 2 replicas, originally 2.18% failure, now
+~98.3% success / ~1.7% failure, mean of 2 independent post-fix runs,
+after the bcrypt fix). Monolith avoids this class of failure entirely
+since it never proxies signup through a network call to a separate
+service - the entire journey stays within one process. This is a
+genuinely nuanced finding: Enhanced's architecture does not eliminate
+this bottleneck class, but demonstrably reduces its severity through
+replication, while achieving dramatically better latency than both
+other architectures. This directly and precisely supports Objective
+3's evaluation of resilience under load.
+
+**Important caveat for this comparison:** Enhanced's post-fix ~98.3%
+figure is not a clean architecture-only result - the bcrypt fix was
+applied to Enhanced's user-service ONLY (Baseline and Monolith remain
+on the original `bcryptjs`, deliberately, per `docs/decision_log.md`).
+Part of Enhanced's improvement over Baseline is now attributable to
+this library difference, not purely to Enhanced's replication
+advantage. Both the 97.81% (pre-fix, clean architecture comparison)
+and ~98.3% (post-fix, confounded by the library swap) figures are kept
+here intentionally, so this distinction stays visible rather than
+being silently resolved in Enhanced's favor.
+
+**Unresolved open question, not to be smoothed over:** the two
+post-fix runs disagree with each other on checkout-session's failure
+rate direction relative to the original 4.93% baseline (Run 2: 5.15%,
+up; Run 3: 3.64%, down) - a larger swing than the ~1pp improvement seen
+on the checks the fix should plausibly affect. See the subsection above
+for the full framing; this is left open rather than resolved in either
+direction.
 
 ## 7. WebPageTest Geographic Latency
 (pending)
