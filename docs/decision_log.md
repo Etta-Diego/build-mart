@@ -3958,3 +3958,71 @@ Written for direct reuse in the dissertation's methodology chapter.
   unrelated new finding.
 - **Status:** PLANNED - nothing executed yet.
 - **Stage:** Enhanced Microservices.
+
+## [2026-07-29] Experiment #12 results: Network Communication Efficiency
+
+- **Call measured:** Cart Service's real `getProductsByIds` dependency -
+  `POST /api/products/batch`, `{ids: [...]}` (5 real product IDs from
+  the live catalog), against Product Service. Not a synthetic call.
+
+- **Internal path** (N=500, sequential, from inside a cart-service pod,
+  `http://product-service:5001`, Kubernetes Service DNS):
+  mean=13.442ms, stddev=24.406ms, min=4.465ms, p50=6.741ms,
+  p95=59.175ms, p99=92.637ms, max=397.057ms, 0 errors.
+
+- **External-equivalent path** (N=500, sequential, executed from
+  `buildmart-k6-runner` - same region, per this project's established
+  execution-location discipline, not a local connection - via
+  `https://7iuv0462q5.execute-api.eu-west-3.amazonaws.com/api/products/batch`,
+  routed through the Gateway's `ANY /api/products/{proxy+}` -> VPC Link
+  -> the same backend): mean=12.916ms, stddev=4.128ms, min=8.713ms,
+  p50=11.575ms, p95=21.731ms, p99=31.638ms, max=36.676ms, 0 errors.
+  Response caching was confirmed unavailable on this Gateway (HTTP API
+  / protocol v2 does not support stage-level caching, unlike REST API
+  v1), so these are genuine backend round-trips, not cached responses.
+
+- **Ratios (internal / external):** p50 0.58x (internal faster),
+  mean 1.04x (internal marginally slower), stddev 5.91x (internal far
+  less consistent), p95 2.72x (internal worse), p99 2.93x (internal
+  worse), max 10.8x (internal far worse).
+
+- **Finding, reported as measured, not fitted to the hypothesis:** the
+  internal path is faster at the median (6.7ms vs 11.6ms) but shows
+  substantially higher variance and worse tail latency than the
+  external Gateway-routed path - the opposite of "the internal path
+  should be both faster and more consistent." Root-cause investigation
+  (not full-depth, but reproduction-based rather than assumed):
+  the internal path's raw samples show the first ~12-14 sequential
+  requests alternating almost perfectly between ~90-100ms and ~10ms,
+  settling afterward to a lower baseline with occasional recurring
+  spikes. Tested whether this was cross-pod/cross-AZ round-robin
+  (Product Service runs 2 replicas, one in the caller's own AZ
+  eu-west-3c, one in eu-west-3b) by hitting each pod's IP directly,
+  bypassing the Kubernetes Service entirely (N=50 each) - both pods
+  individually reproduced the same alternating-then-settling shape,
+  ruling out AZ/pod-placement as the cause. Most consistent with a
+  per-TCP-connection warm-up effect (TCP slow-start / Nagle-delayed-ACK
+  type interaction, or connection-pool warm-up in the Node fetch/undici
+  client or on the Product Service side) rather than a network-path or
+  placement issue - not confirmed to that level of specificity, and
+  left as an open question rather than asserted as fact.
+
+- **Tied to Experiment #11:** #11 established that this same VPC-private
+  path is unreachable from the public internet by two independent
+  layers (SG rule, VPC non-routability). #12 shows that this is a
+  finding about network *isolation*, not a guarantee of network
+  *performance consistency* - the two properties don't move together
+  in this deployment. The internal path is faster in the typical case
+  (lower median) but the external Gateway-routed path is the more
+  latency-consistent one under this measurement, tail-latency included.
+  This is reported as a genuine, unexpected nuance rather than smoothed
+  into "internal is strictly better," consistent with this project's
+  standing practice of naming unexplained variance directly (see the
+  bcrypt-fix checkout-session cross-run disagreement entry).
+
+- **Status:** COMPLETE. The connection-warm-up pattern behind the
+  internal path's tail latency is a candidate for a future dedicated
+  investigation, same category as the still-open user-service 503
+  investigation - explicitly deferred, not dropped, and recorded here
+  as a deliberate scope decision rather than an unnoticed gap.
+- **Stage:** Enhanced Microservices.
