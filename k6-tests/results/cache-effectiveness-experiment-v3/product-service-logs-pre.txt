@@ -1,0 +1,2 @@
+MongoDB connected: ac-l11pxv5-shard-00-02.2cibdjn.mongodb.net
+Product service is running on http://localhost:5001

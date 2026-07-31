@@ -1,0 +1,7 @@
+    Limits:
+      cpu:     1
+      memory:  512Mi
+    Requests:
+      cpu:      500m
+      memory:   256Mi
+    Liveness:   http-get http://:http/metrics delay=15s timeout=3s period=15s #success=1 #failure=3

@@ -1,0 +1,2 @@
+NAME              READY   UP-TO-DATE   AVAILABLE   AGE     CONTAINERS        IMAGES                                                                                                            SELECTOR
+product-service   2/2     2            2           7d23h   product-service   706059253443.dkr.ecr.eu-west-3.amazonaws.com/buildmart-product-service:528b7597b5aef6ee20dbaaf4f258226499e35d74   app=product-service

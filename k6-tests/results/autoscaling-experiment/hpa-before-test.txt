@@ -1,0 +1,89 @@
+=== 2026-07-30T07:17:15.645Z OFFICIAL EXPERIMENT PRE-TEST BASELINE ===
+
+=== kubectl get hpa ===
+NAME                  REFERENCE                    TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+order-service-hpa     Deployment/order-service     cpu: 0%/70%   2         20        2          7d15h
+product-service-hpa   Deployment/product-service   cpu: 0%/70%   2         20        2          7d15h
+
+=== describe hpa product-service-hpa ===
+Name:                                                  product-service-hpa
+Namespace:                                             buildmart
+Labels:                                                app=product-service
+                                                       app.kubernetes.io/part-of=buildmart
+                                                       stage=enhanced-microservices
+Annotations:                                           <none>
+CreationTimestamp:                                     Wed, 22 Jul 2026 16:29:13 +0100
+Reference:                                             Deployment/product-service
+Metrics:                                               ( current / target )
+  resource cpu on pods  (as a percentage of request):  0% (3m) / 70%
+Min replicas:                                          2
+Max replicas:                                          20
+Behavior:
+  Scale Up:
+    Stabilization Window: 0 seconds
+    Select Policy: Max
+    Policies:
+      - Type: Pods     Value: 4    Period: 15 seconds
+      - Type: Percent  Value: 100  Period: 15 seconds
+  Scale Down:
+    Stabilization Window: 120 seconds
+    Select Policy: Max
+    Policies:
+      - Type: Percent  Value: 100  Period: 15 seconds
+Deployment pods:       2 current / 2 desired
+Conditions:
+  Type            Status  Reason            Message
+  ----            ------  ------            -------
+  AbleToScale     True    ReadyForNewScale  recommended size matches current size
+  ScalingActive   True    ValidMetricFound  the HPA was able to successfully calculate a replica count from cpu resource utilization (percentage of request)
+  ScalingLimited  True    TooFewReplicas    the desired replica count is less than the minimum replica count
+Events:           <none>
+
+=== deployment product-service ===
+NAME              READY   UP-TO-DATE   AVAILABLE   AGE     CONTAINERS        IMAGES                                                                                                            SELECTOR
+product-service   2/2     2            2           7d15h   product-service   706059253443.dkr.ecr.eu-west-3.amazonaws.com/buildmart-product-service:528b7597b5aef6ee20dbaaf4f258226499e35d74   app=product-service
+
+=== existing pods ===
+NAME                               READY   STATUS    RESTARTS   AGE   IP               NODE                                           NOMINATED NODE   READINESS GATES
+product-service-54d7c5498b-fq69q   1/1     Running   0          14h   192.168.20.8     ip-192-168-14-219.eu-west-3.compute.internal   <none>           <none>
+product-service-54d7c5498b-zngxm   1/1     Running   0          14h   192.168.88.242   ip-192-168-87-162.eu-west-3.compute.internal   <none>           <none>
+
+=== live resource requests/limits ===
+{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}
+
+=== node capacity ===
+NAME                                           STATUS   ROLES    AGE     VERSION                INTERNAL-IP      EXTERNAL-IP     OS-IMAGE                        KERNEL-VERSION                    CONTAINER-RUNTIME
+ip-192-168-0-183.eu-west-3.compute.internal    Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.0.183    51.44.222.210   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-14-219.eu-west-3.compute.internal   Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.14.219   52.47.105.201   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-15-33.eu-west-3.compute.internal    Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.15.33    13.38.73.207    Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-34-144.eu-west-3.compute.internal   Ready    <none>   7d18h   v1.32.13-eks-8f14419   192.168.34.144   51.44.172.90    Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-51-210.eu-west-3.compute.internal   Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.51.210   15.237.62.241   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-57-52.eu-west-3.compute.internal    Ready    <none>   3d11h   v1.32.13-eks-8f14419   192.168.57.52    15.236.19.197   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-59-51.eu-west-3.compute.internal    Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.59.51    13.36.230.236   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-64-217.eu-west-3.compute.internal   Ready    <none>   3d15h   v1.32.13-eks-8f14419   192.168.64.217   13.37.240.20    Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-66-34.eu-west-3.compute.internal    Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.66.34    15.188.14.223   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-73-255.eu-west-3.compute.internal   Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.73.255   13.38.10.204    Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-87-162.eu-west-3.compute.internal   Ready    <none>   3d13h   v1.32.13-eks-8f14419   192.168.87.162   13.38.118.62    Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+ip-192-168-9-112.eu-west-3.compute.internal    Ready    <none>   7d18h   v1.32.13-eks-8f14419   192.168.9.112    51.44.179.129   Amazon Linux 2023.12.20260710   6.1.176-221.360.amzn2023.x86_64   containerd://2.2.4+unknown
+NAME                                           CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)   
+ip-192-168-0-183.eu-west-3.compute.internal    31m          1%       646Mi           19%         
+ip-192-168-14-219.eu-west-3.compute.internal   22m          1%       702Mi           21%         
+ip-192-168-15-33.eu-west-3.compute.internal    69m          3%       733Mi           22%         
+ip-192-168-34-144.eu-west-3.compute.internal   39m          2%       1159Mi          35%         
+ip-192-168-51-210.eu-west-3.compute.internal   26m          1%       650Mi           19%         
+ip-192-168-57-52.eu-west-3.compute.internal    24m          1%       646Mi           19%         
+ip-192-168-59-51.eu-west-3.compute.internal    31m          1%       646Mi           19%         
+ip-192-168-64-217.eu-west-3.compute.internal   25m          1%       671Mi           20%         
+ip-192-168-66-34.eu-west-3.compute.internal    29m          1%       632Mi           19%         
+ip-192-168-73-255.eu-west-3.compute.internal   29m          1%       598Mi           18%         
+ip-192-168-87-162.eu-west-3.compute.internal   27m          1%       700Mi           21%         
+ip-192-168-9-112.eu-west-3.compute.internal    29m          1%       1104Mi          33%         
+
+=== control check: order-service ===
+NAME            READY   UP-TO-DATE   AVAILABLE   AGE     CONTAINERS      IMAGES                                                                                                          SELECTOR
+order-service   2/2     2            2           7d15h   order-service   706059253443.dkr.ecr.eu-west-3.amazonaws.com/buildmart-order-service:f6e9fbb63aeeffbd26083200db1d721a7e47ffaf   app=order-service
+
+=== top pods (product-service) baseline ===
+NAME                               CPU(cores)   MEMORY(bytes)   
+product-service-54d7c5498b-fq69q   3m           55Mi            
+product-service-54d7c5498b-zngxm   3m           55Mi            

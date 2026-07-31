@@ -1,0 +1,2 @@
+NAME                  REFERENCE                    TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+product-service-hpa   Deployment/product-service   cpu: 0%/70%   2         20        2          7d23h

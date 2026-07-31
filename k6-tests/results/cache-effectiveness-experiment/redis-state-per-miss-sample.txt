@@ -1,0 +1,49 @@
+
+--- MISS sample 1 ---
+delete: {"timestamp":"2026-07-30T10:21:44.474Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:21:56.543Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:22:29.840Z","key":"featured_products","exists":1,"type":"string","ttl":285,"memoryUsageBytes":3648}
+--- MISS sample 2 ---
+delete: {"timestamp":"2026-07-30T10:22:37.544Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:22:42.428Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): 
+--- MISS sample 3 ---
+delete: {"timestamp":"2026-07-30T10:23:37.526Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:23:45.091Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:23:52.130Z","key":"featured_products","exists":1,"type":"string","ttl":297,"memoryUsageBytes":3648}
+--- MISS sample 4 ---
+delete: {"timestamp":"2026-07-30T10:23:56.395Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:24:02.735Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:24:10.841Z","key":"featured_products","exists":1,"type":"string","ttl":296,"memoryUsageBytes":3648}
+--- MISS sample 5 ---
+delete: {"timestamp":"2026-07-30T10:24:14.299Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:24:17.765Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:24:25.345Z","key":"featured_products","exists":1,"type":"string","ttl":296,"memoryUsageBytes":3648}
+--- MISS sample 6 ---
+delete: {"timestamp":"2026-07-30T10:24:29.537Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:24:34.997Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:24:41.449Z","key":"featured_products","exists":1,"type":"string","ttl":297,"memoryUsageBytes":3648}
+--- MISS sample 7 ---
+delete: {"timestamp":"2026-07-30T10:24:44.745Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:24:48.001Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:24:54.467Z","key":"featured_products","exists":1,"type":"string","ttl":297,"memoryUsageBytes":3648}
+--- MISS sample 8 ---
+delete: {"timestamp":"2026-07-30T10:24:57.545Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:25:00.748Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:25:06.960Z","key":"featured_products","exists":1,"type":"string","ttl":296,"memoryUsageBytes":3648}
+--- MISS sample 9 ---
+delete: {"timestamp":"2026-07-30T10:25:10.666Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:25:14.690Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:25:21.511Z","key":"featured_products","exists":1,"type":"string","ttl":296,"memoryUsageBytes":3648}
+--- MISS sample 10 ---
+delete: {"timestamp":"2026-07-30T10:25:24.561Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:25:27.808Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:25:34.402Z","key":"featured_products","exists":1,"type":"string","ttl":296,"memoryUsageBytes":3648}
+--- MISS sample 11 ---
+delete: {"timestamp":"2026-07-30T10:25:38.281Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:25:41.601Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:25:48.309Z","key":"featured_products","exists":1,"type":"string","ttl":296,"memoryUsageBytes":3648}
+--- MISS sample 12 ---
+delete: {"timestamp":"2026-07-30T10:25:51.393Z","key":"featured_products","deletedCount":1}
+pre-request (expect exists=0): {"timestamp":"2026-07-30T10:25:54.372Z","key":"featured_products","exists":0,"type":"none","ttl":null,"memoryUsageBytes":null}
+post-request (expect exists=1): {"timestamp":"2026-07-30T10:26:01.122Z","key":"featured_products","exists":1,"type":"string","ttl":297,"memoryUsageBytes":3648}

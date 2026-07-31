@@ -4344,3 +4344,347 @@ Written for direct reuse in the dissertation's methodology chapter.
   data collection finished across all three architectures).
 - **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
   Microservices) - Experiment 1, Application Loading Performance.
+
+## [2026-07-30] Autoscaling Responsiveness (Kubernetes HPA) - official experiment results
+
+- **Context:** redesigned and executed the official Kubernetes HPA
+  responsiveness experiment, explicitly built to avoid reusing the
+  earlier, unsupported "product-service scaled from 2 to 15 replicas"
+  figure that appears in this file's `benchmark-results.md`-derived
+  narrative for an earlier, less rigorously-monitored Full-Scale Test.
+  Used a `ramping-vus` k6 profile (100/200/400/600/800/1000/1200/1400/
+  1600/1800/2000 VUs, staged, followed by ramp-down) with five
+  independent, kubectl-lifecycle-agnostic monitoring streams (HPA
+  watch, deployment watch, pod watch, HPA events, resource monitoring)
+  to reconstruct a verified replica-count and CPU-utilisation timeline,
+  cross-referenced against directly-observed `SuccessfulRescale`
+  events.
+
+- **Result:** replica count increased from a baseline of 2 to a
+  **directly-measured maximum of 13** across the load ramp, tracking
+  CPU utilisation against the 70% HPA target:
+
+  | Workload (VU stage start) | CPU% (nearest reading) | Replicas |
+  |---|---|---|
+  | 100 | 30% | 2 |
+  | 200 | 30% | 2 |
+  | 400 | 51% | 2 |
+  | 600 | 70% | 3 |
+  | 800 | 67% | 7 |
+  | 1000 | 72% | 7 |
+  | 1200 | 65% | 7 |
+  | 1400 | 66% | 8 |
+  | 1600 | 73% | 10 |
+  | 1800 | 72% | 10 |
+  | 2000 | 64% | 13 |
+
+  Deduplicated `SuccessfulRescale` events (directly observed or
+  back-calculated from reported age, full provenance recorded
+  per-event in `k6-tests/results/autoscaling-experiment/autoscaling-timeline.csv`):
+  scale-up 2->3 (07:33:24Z) ->4 (07:35:39Z) ->6 (~07:38:29Z) ->7
+  (~07:41:30Z) ->8 (07:43:26Z) ->10 (07:46:29Z) ->11 (07:52:27Z) ->13
+  (07:52:43Z, maximum reached). After load was fully removed at
+  08:00:12Z, scale-down completed rapidly: 13->6 at 08:00:13Z, 6->2 at
+  08:00:32Z - approximately 20 seconds from load removal to full
+  return to baseline (2 replicas).
+
+- **Correction to a previously-referenced figure:** this rigorously
+  monitored experiment's directly-measured maximum replica count was
+  **13**, not the "15" figure referenced in the earlier, less
+  rigorously-instrumented Full-Scale Test narrative. That earlier
+  figure was traced (via forensic investigation of the raw session
+  transcript, conducted earlier in this project) to the researcher's
+  own contemporaneous observation rather than a machine-captured log,
+  and is not corroborated by this experiment's evidence. Both figures
+  are left on record rather than one silently overwriting the other;
+  this experiment's 13-replica maximum is the one supported by direct,
+  timestamped Kubernetes evidence and is the authoritative figure for
+  dissertation use.
+
+- **Incidents during execution (disclosed, not hidden):** four
+  transient `kubectl --watch` stream disconnections (`http2: client
+  connection lost`), each recovered via an auto-reconnect wrapper with
+  a logged gap marker; a disk-exhaustion incident on the runner
+  (`/tmp/k6-raw.json` filled the root filesystem - mitigated by
+  deletion, with the smaller `--summary-export` JSON retained as a
+  fallback, so no core evidence was lost); one pod (`hdcg6`) logged a
+  benign `Error` during termination, assessed as non-anomalous
+  shutdown noise.
+
+- **Status:** COMPLETE. Evidence in
+  `k6-tests/results/autoscaling-experiment/`; not yet committed to git
+  as of this log entry.
+- **Stage:** Enhanced Microservices - Autoscaling Responsiveness.
+
+## [2026-07-30] Redis Cache Effectiveness - v1 initial result and v3 final, superseding result
+
+- **v1 (single-block design, N=12 MISS / N=100 HIT):** executed a
+  MISS-then-HIT block design against `product-service`'s
+  `GET /api/products/featured` (cache-aside, Redis, TTL 300s), with
+  Redis state independently verified (`EXISTS`/`TYPE`/`TTL`/
+  `MEMORY USAGE`) before/after every sample. Result: MISS mean=
+  28.391ms (SD=5.709), HIT mean=11.624ms, **59.06% mean / 70.55%
+  median latency reduction**. An independent methodological review
+  identified a time-order confound: MISS and HIT phases ran as
+  sequential blocks, leaving process/connection warm-up as a plausible
+  alternative explanation for part of the observed effect.
+
+- **v3 (interleaved repeated-measures redesign, final, N=30 MISS /
+  N=297 HIT):** redesigned to run 30 interleaved cycles (reset ->
+  verify absent -> 1 MISS request -> verify populated -> randomized
+  8-12 HIT requests -> verify), explicitly closing the v1 order
+  confound. Redis instance confirmed shared with `cart-service`
+  (SHA-256 `REDIS_URL` hash comparison), so `keyspace_hits`/
+  `keyspace_misses` were used only as coarse supporting evidence, never
+  as per-cycle proof. Result: MISS mean=21.152ms (SD=7.557, 95% CI
+  [18.330, 23.974]), HIT mean=14.782ms (SD=6.307, 95% CI [14.062,
+  15.502]). Primary analysis (paired Wilcoxon signed-rank on the 30
+  cycle-level pairs): W=55.0, p=0.0001, effect size dz=0.752, paired
+  bootstrap 95% CI on the mean difference [3.320, 9.119]ms. Secondary
+  pooled analysis (Mann-Whitney U=7228, p<0.000001; Welch's t=4.462,
+  df=33.208, p=0.0001) corroborates. Drift check (Spearman, cycle
+  index vs. per-cycle mean latency): MISS rho=-0.116 (p=0.540), HIT
+  rho=-0.290 (p=0.120) - no significant residual time-order drift,
+  supporting the redesign's internal validity. **Result: 30.12% mean /
+  29.20% median latency reduction.**
+
+- **v3 supersedes v1 for dissertation use.** The smaller effect size in
+  v3 relative to v1 (30% vs. 59%) is itself explained by evidence
+  gathered during v3, not merely asserted: product-service pods had
+  accumulated 7d22h uptime (vs. presumably less at v1's runtime,
+  plausibly lowering MISS cost via connection-pool/JIT warmth), and
+  the shared Redis instance's `keyspace_hits` counter already exceeded
+  663,000 before v3 began, confirming substantially more background
+  load than at v1's runtime (plausibly raising HIT cost under
+  contention). Both directions of the shift are consistent with this
+  account, though it is offered as the most evidence-consistent
+  explanation available, not a proven causal mechanism.
+
+- **Incidents during v3 (disclosed):** two connectivity incidents
+  (Cycles 05 and 21) compromised only the corroborating post-HIT-batch
+  Redis-state confirmation in each case (missing for Cycle 05;
+  rendered uninformative by a 12-minute delay allowing natural TTL
+  expiry for Cycle 21) - the underlying MISS/HIT latency measurements
+  for both cycles were recovered intact from the runner and verified
+  legitimate (12/12 k6 checks passed in each affected batch).
+
+- **HPA/replica count:** confirmed unchanged (2/2) before and after
+  the v3 test, ruling out autoscaling as a confound.
+
+- **Status:** COMPLETE (both v1 and v3; v3 is the accepted, final
+  dataset for dissertation use). Evidence in
+  `k6-tests/results/cache-effectiveness-experiment-v3/`; not yet
+  committed to git as of this log entry.
+- **Stage:** Enhanced Microservices - Redis Cache Effectiveness.
+
+## [2026-07-30] Resource Utilisation experiment - official results
+
+- **Context:** executed the Resource Utilisation experiment across all
+  three architectures at 200/1000/2000 VUs, reused directly from an
+  existing resource-utilisation comparison already present in this
+  file's `benchmark-results.md`-derived precedent, which had explicitly
+  disclosed that its own Enhanced-architecture data was never actually
+  matched to those levels - this experiment closes that specific,
+  previously-documented gap. Pre-flight checks confirmed (not assumed):
+  Monolith (t3.small) and Baseline's product-service (t3.micro) are
+  both PM2-managed Node processes on dedicated EC2 instances, verified
+  via SSH; both are burstable T-family instances, with CPU credit
+  balances confirmed fully topped up before testing (Monolith 576/576,
+  Baseline 288/288) and only modestly drawn down afterward (567.5/576,
+  ~277-281/288) - ruling out credit-throttling as a confound. Each
+  workload level ran as a 5-minute plateau (60s warm-up discarded,
+  remaining 4 minutes sampled every 15s).
+
+- **Result (CPU/memory interpreted within each architecture, not
+  compared as absolute values across architectures, per this
+  experiment's approved fairness principle):**
+
+  | Architecture | VUs | CPU | Memory | Replicas/Capacity | Throughput | Success Rate |
+  |---|---|---|---|---|---|---|
+  | Enhanced | 200 | 50.3% of 70% target | 53.3 Mi/pod | 2 (constant) | 196.0 req/s | 99.91% |
+  | Enhanced | 1000 | 77.8% of 70% target | 50.9 Mi/pod | 2->8 | 872.4 req/s | 99.87% |
+  | Enhanced | 2000 | 71.5% of 70% target | 50.5 Mi/pod | 7->15 | 1915.8 req/s | 99.90% |
+  | Baseline | 200 | 28.3% (PM2) | 97.1 MB | 1 (fixed) | 197.8 req/s | 100.00% |
+  | Baseline | 1000 | 116.2% (PM2, saturated) | 127.4 MB | 1 (fixed) | 624.7 req/s | 100.00% |
+  | Baseline | 2000 | 116.3% (PM2, flat) | 182.0 MB | 1 (fixed) | 598.9 req/s | 100.00% |
+  | Monolith | 200 | 30.0% (PM2) | 147.7 MB | 1 (fixed) | 198.4 req/s | 100.00% |
+  | Monolith | 1000 | 110.8% (PM2, saturated) | 166.1 MB | 1 (fixed) | 700.2 req/s | 100.00% |
+  | Monolith | 2000 | 113.2% (PM2, flat) | 220.7 MB | 1 (fixed) | 670.1 req/s | 100.00% |
+
+- **Key finding:** Enhanced's replica count and CPU utilisation moved
+  together with load (2 replicas/~50% CPU at 200VU to 15 replicas/~71%
+  CPU at 2000VU - CPU ending lower, not higher, despite a 10x VU
+  increase, because allocated capacity tracked demand). Monolith and
+  Baseline both saturated by 1000VU and stayed flat into 2000VU (fixed
+  capacity, no mechanism to add more), with throughput plateauing or
+  declining rather than continuing to grow.
+
+- **Disclosed execution note:** the three levels ran back-to-back with
+  no cooldown between them, so Enhanced's 2000VU plateau inherited
+  residual scaling from the immediately-preceding 1000VU plateau
+  rather than starting from a clean 2-replica baseline (consistent
+  with the platform's documented 120s HPA scale-down stabilisation
+  window).
+
+- **Status:** COMPLETE. Evidence in
+  `k6-tests/results/resource-utilisation-experiment/`; not yet
+  committed to git as of this log entry.
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - Resource Utilisation.
+
+## [2026-07-30] Deployment Availability - official experiment results
+
+- **Context:** evaluated whether each architecture could sustain
+  continuous availability during a live deployment update. A
+  continuous request stream was directed at each architecture's live
+  endpoint while a restart was triggered mid-stream; every request's
+  outcome (success or failure) was logged with a timestamp, allowing
+  precise identification of any service interruption.
+
+- **Result:**
+
+  | Architecture | Total Requests Tested | Failed Requests | Failure Rate |
+  |---|---|---|---|
+  | Monolith | 180 (3 runs x 60) | 3 | 1.67% |
+  | Baseline (product-service) | 180 (3 runs x 60) | 6 | 3.33% |
+  | Enhanced (via API Gateway) | 450 (3 runs x 150) | 0 | 0.00% |
+
+- **Key finding:** across 450 requests spanning three separate
+  rolling-update events, the Enhanced Microservices architecture
+  recorded zero failed requests, demonstrating zero-downtime
+  deployment via Kubernetes' rolling-update mechanism. The Monolithic
+  and Baseline architectures each recorded a small but consistent
+  number of failed requests during their respective restarts - a
+  brief window, on the order of a single request cycle, during which
+  the service process was unavailable. This is reported as a direct
+  trade-off: the additional time taken by Enhanced's rolling-update
+  mechanism is the mechanism by which continuous availability is
+  preserved, whereas the faster restart times of the Monolithic and
+  Baseline architectures come at the cost of a brief service
+  interruption.
+
+- **Status:** COMPLETE.
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - Deployment Availability.
+
+## [2026-07-31] Phase 7 Completion - 100 VU Comparative Checkout Transaction Evaluation
+
+- **Context:** the End-to-End Customer Checkout Transaction Performance
+  Evaluation's 100 VU condition was executed across all three
+  architectures, using the identical k6 workload, transaction flow,
+  pacing, and pre-seeded test-account pool established and validated
+  through Phases 1-6 (dry run, 25 VU, and the associated Baseline
+  EOF/connection-handling diagnostic investigation). This is the final
+  planned VU level for this experiment; no further VU escalation was
+  performed.
+
+- **Result:**
+
+  | Architecture | Success Rate | Median Latency | p95 | Notable Reliability Finding |
+  |---|---|---|---|---|
+  | Monolith | 83.56% | 12203 ms | 12590.6 ms | Stripe `endpoint-concurrency` 429 (external dependency, one event, ~69-minute stall) |
+  | Baseline Microservices | 85.60% | 8139 ms | 10222 ms | 475 EOF failures, concentrated entirely on cart-service's add-to-cart endpoint |
+  | Enhanced Microservices | 97.56% | 5332 ms | 5642 ms | ~21 connection-establishment timeouts at the API Gateway boundary |
+
+  Monolith's latency/throughput/wall-clock figures are disclosed as
+  affected by the Stripe incident and are not directly comparable to
+  the other two architectures' clean runs.
+
+- **Key finding, categorised per this experiment's approved
+  interpretation rule (Category A: architecture-related; Category B:
+  external dependency):**
+  - **Category B (external dependency, Monolith only this round):**
+    the Stripe rate-limit event (`StripeRateLimitError`,
+    `stripe-rate-limited-reason: endpoint-concurrency`) is an external
+    payment-provider constraint shared by all three architectures'
+    checkout-session call, not an architectural failure of the
+    Monolith. It is not to be interpreted as evidence against the
+    Monolithic architecture, and equivalent behaviour in Baseline or
+    Enhanced would be classified the same way.
+  - **Category A (architecture-related):** Baseline's failures were
+    concentrated entirely on a single service instance (cart-service,
+    one process on one EC2 host) - consistent with, and an escalation
+    of, the per-process connection-handling limitation already
+    characterised at 25 VU. Enhanced's connection-establishment
+    timeouts occurred at the API Gateway boundary at a higher rate
+    than at 25 VU, but its overall success rate held up better than
+    Baseline's at the same VU level - offered as consistent with
+    Baseline's affected service running as a single process versus
+    Enhanced's equivalent service running as two Kubernetes-managed
+    replicas, not as a general claim of Enhanced's superiority. HPA did
+    not scale during this workload, so no autoscaling-driven
+    improvement is claimed.
+
+- **Decision:** complete the 100 VU experiment and stop further load
+  escalation. The experiment reached its planned evaluation stage and
+  produced sufficient evidence for architectural comparison; further
+  VU increases were intentionally avoided to preserve reproducibility
+  and avoid compounding external (Stripe) dependency effects further.
+
+- **Status:** COMPLETE. Evidence in
+  `k6-tests/results/e2e-checkout-transaction-experiment/`. Approved for
+  dissertation analysis and Chapter 4 discussion. No additional VU
+  testing to be performed unless a new experimental objective is
+  formally defined.
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - End-to-End Customer Checkout Transaction
+  Performance Evaluation.
+
+## [2026-07-31] CDN Performance Evaluation - discarded and rerun from a controlled AWS environment
+
+- **Why the previous run was discarded:** the first CDN Performance
+  Evaluation (cache-hit sustained load + cache-miss invalidation cycles)
+  was executed from the tester's local residential connection after SSH
+  access to this project's AWS test infrastructure was unexpectedly lost
+  mid-session. That run showed severe, implausible tail latency (hit
+  p99 15.2s, max 59s on a 60s client timeout; 34/2404 requests timed out
+  outright) inconsistent with genuine CloudFront edge behaviour - a
+  client-side network artifact, not a CDN measurement. Per explicit
+  instruction, none of those numbers are used in the dissertation.
+- **Why the rerun was necessary:** to obtain measurements free of the
+  local-network confound, satisfying this experiment's core requirement
+  that cache state (HIT vs MISS) be the *only* independent variable.
+- **Root cause of the SSH loss, diagnosed (read-only) before any fix:**
+  the security group for the dedicated k6 runner (`13.36.34.237`,
+  `sg-08b98e852875628dc`) restricted inbound SSH to a single IP
+  (`102.90.42.107/32`) that no longer matched the tester's current
+  ISP-assigned IP (`102.88.113.18`) - an ordinary IP rotation, not an
+  infrastructure fault. Two remediation paths were identified (adding
+  the current IP to the security group and using the dedicated runner;
+  or using AWS Systems Manager to execute on an Enhanced EKS worker node
+  without any security-group change). The user explicitly chose the
+  security-group update.
+- **Infrastructure change made, with explicit confirmation:** one
+  additive inbound rule was added to `sg-08b98e852875628dc` permitting
+  TCP/22 from `102.88.113.18/32`. The pre-existing rule (the stale IP)
+  was left untouched, not removed - purely additive, reversible.
+- **Confirmation the rerun was performed from a controlled AWS
+  environment:** both experiments' measured HTTP requests executed via
+  SSH on the dedicated k6 runner (EC2, `eu-west-3`) - confirmed via
+  pre-run validation (SSH connectivity, AWS CLI, CloudFront distribution
+  `Deployed`/`Enabled`, all four test assets reachable and warmable).
+  AWS control-plane calls for the cache-miss cycles (invalidation
+  create/wait) ran from the local orchestrating machine, since their own
+  timing is not part of the reported metric and this avoided placing AWS
+  credentials on the shared runner - only the timed measurement itself
+  ran on AWS infrastructure.
+- **Deviation from planned methodology, caught and corrected before
+  producing results:** the first attempt at the cache-miss cycles
+  produced a contaminated reading, because Experiment 1's sustained
+  cache-hit load test (which also exercises the CSS bundle) was still
+  running concurrently and re-warmed the cache within the same second an
+  invalidation completed. Corrected by waiting for Experiment 1 to fully
+  finish before starting Experiment 2 - no cross-experiment interference
+  in the reported data.
+- **Result:** cache-hit (20 VU, 3 min, n=495,921): mean 7.02ms, median
+  6.10ms, p95 13.78ms, p99 18.22ms, 100.00% success. Cache-miss (25
+  controlled invalidate-wait-request cycles, CSS bundle): mean 94.84ms,
+  median 92ms, p95 126ms, sd 13.92ms, 25/25 valid. Median hit latency is
+  ~15x lower than median miss latency - both distributions are tight and
+  well-behaved, in sharp contrast to the discarded local-network run.
+- **Status:** COMPLETE. Supersedes the previous (discarded) CDN
+  Performance Evaluation run in its entirety. Evidence in
+  `k6-tests/results/cdn-evaluation/` (raw CSVs, summary stats CSV,
+  rewritten dissertation subsection 4.7.3.9).
+- **Stage:** Enhanced Microservices (frontend performance evaluation,
+  feeds into Chapter 4.7.3.9 CDN Performance Evaluation).

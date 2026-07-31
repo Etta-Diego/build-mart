@@ -1,0 +1,2 @@
+NAME              READY   UP-TO-DATE   AVAILABLE   AGE
+product-service   2/2     2            2           8d
