@@ -4688,3 +4688,166 @@ Written for direct reuse in the dissertation's methodology chapter.
   rewritten dissertation subsection 4.7.3.9).
 - **Stage:** Enhanced Microservices (frontend performance evaluation,
   feeds into Chapter 4.7.3.9 CDN Performance Evaluation).
+
+## [2026-07-31] Baseline frontend regression - localhost API URLs baked into production build, introduced during the badge redeploy, fixed same day
+
+- **Context:** GTmetrix testing of the Baseline frontend
+  (`http://15.237.90.142`) surfaced browser console errors -
+  `GET http://localhost:5001/api/products/featured
+  net::ERR_CONNECTION_REFUSED` and the equivalent for
+  `localhost:5002` - meaning the production build was calling
+  `localhost` instead of the deployed public service endpoints.
+- **Root cause, verified before any fix was applied:** `frontend-baseline/.env`
+  contained placeholder `localhost` URLs for all five backend services
+  (`VITE_PRODUCT_SERVICE_URL` through `VITE_ORDER_SERVICE_URL`). Vite bakes
+  these in at build time. Confirmed by inspecting the backup taken
+  immediately before the same-day badge redeploy
+  (`/var/www/frontend-baseline.backup-20260731142034`): that build's
+  bundle correctly called the real deployed IPs, proving the localhost
+  values were not yet an active problem until a fresh build was made.
+- **This regression was self-introduced, not a pre-existing bug found
+  independently.** The badge redeploy earlier the same day rebuilt
+  `frontend-baseline` from the current `.env` without checking the
+  service-URL variables (only `VITE_APP_LABEL`/`VITE_APP_COLOR` were
+  verified at the time) - that rebuild silently picked up the stale
+  `localhost` placeholders and deployed them. Recorded here directly
+  rather than presented as an unrelated fix.
+- **Correct endpoints, determined from the deployed infrastructure, not
+  guessed** - cross-checked against three independent sources in
+  agreement: the pre-regression backup bundle, `k6-tests/config.js`
+  (already used throughout this project's load-testing work), and the
+  live services verified working all session:
+  - `VITE_PRODUCT_SERVICE_URL=http://15.188.19.182:5001`
+  - `VITE_USER_SERVICE_URL=http://35.181.186.152:5002`
+  - `VITE_CART_SERVICE_URL=http://13.37.226.159:5003`
+  - `VITE_COUPON_SERVICE_URL=http://13.39.74.130:5004`
+  - `VITE_ORDER_SERVICE_URL=http://15.236.249.159:5005`
+
+  Baseline has no API Gateway or reverse proxy (that is Enhanced-only),
+  so direct EC2 endpoints are the correct, consistent approach - matching
+  what `config.js` and the pre-regression build already used.
+- **Fix applied:** `frontend-baseline/.env` updated with the five URLs
+  above (no other `localhost` references found in source or Vite
+  config - the one remaining `localhost` string in the rebuilt bundle
+  was verified to be an unrelated library-internal fallback,
+  `window.location.href || "http://localhost"`, not an application URL).
+  Rebuilt via `npm run build`, verified the new bundle contains the
+  correct IPs and no application-level `localhost` reference, backed up
+  the (broken) currently-live build first, then deployed via the same
+  atomic swap + nginx reload procedure used for the badge redeploy.
+- **Verification performed (equivalent to a browser Network-tab check):**
+  live homepage returns 200 and serves the new bundle; the five actual
+  API calls the frontend makes were exercised directly - featured
+  products (200), login (200), profile with token (200), cart with token
+  (200), checkout-session route (400, correct validation response for an
+  empty products array, not a connection error). No `ERR_CONNECTION_REFUSED`
+  anywhere.
+- **Not modified:** application logic, backend services, Monolith or
+  Enhanced frontends.
+- **Status:** COMPLETE. Application ready for GTmetrix testing. Backups
+  of both the pre-regression and the broken intermediate build are kept
+  on the server (`frontend-baseline.backup-20260731142034` and
+  `frontend-baseline.backup-20260731144038`), not deleted.
+- **Stage:** Baseline Microservices.
+
+## [2026-07-31] GTmetrix Frontend Page Load Performance - cross-architecture results recorded
+
+- **Context:** frontend page-load performance measured via GTmetrix
+  (Lighthouse 12.6.1, London UK test server, Chrome 142.0.0.0) across
+  all three deployed architectures, using the same React/Vite
+  application UI and assets. This is a distinct experiment from Section
+  4.7.3.9's CDN cache-hit/cache-miss evaluation - it measures full
+  real-browser page load across architectures, not CloudFront's caching
+  behaviour in isolation. The two datasets are not conflated.
+- **Data-validity check performed before acceptance:** the Baseline
+  Microservices frontend had a same-day `localhost`-API-URL regression
+  (see the preceding decision log entry), fixed and verified the same
+  day. Before accepting any Baseline GTmetrix data, explicitly confirmed
+  with the user which runs were captured after that fix - an initial
+  six-run Baseline dataset could not be confirmed as post-fix and was
+  discarded; a subsequent, explicitly-confirmed-post-fix three-run
+  dataset was used instead. All supplied summary averages (Monolith,
+  Baseline, Enhanced) were independently recomputed from the raw
+  per-run figures and confirmed to match before being recorded.
+- **Result (averaged, full detail and interpretation in
+  `k6-tests/results/gtmetrix-frontend-performance/dissertation-writeup.md`):**
+
+  | Architecture | Avg FCP | Avg LCP | Avg Speed Index | Avg TTI | Avg TTFB | Avg Fully Loaded |
+  |---|---|---|---|---|---|---|
+  | Monolith | 804 ms | 804 ms | 905 ms | 844 ms | 26 ms | 6.67 s |
+  | Baseline Microservices | 3.77 s | 3.77 s | 3.77 s | 3.83 s | 3.00 s | 10.40 s |
+  | Enhanced Microservices | 617 ms | 617 ms | 652 ms | 617 ms | 34 ms | 6.67 s |
+
+- **Key finding:** Monolith and Enhanced perform closely to each other
+  (both well under 1s for FCP/LCP, near-identical Fully Loaded Time),
+  substantially ahead of Baseline (3-4x slower FCP/LCP, TTFB roughly
+  100x higher). Framed via named mechanisms, not architectural style in
+  the abstract: Monolith's advantage comes from a single origin with no
+  cross-service hops before render; Enhanced's comes from CloudFront
+  CDN/edge delivery in front of its frontend; Baseline has neither -
+  five backend services reached via direct, uncached, cross-instance
+  network hops with no CDN or reverse proxy - explaining its outlier
+  TTFB and FCP/LCP despite having the same number of decomposed backend
+  services as Enhanced. Explicitly not framed as "microservices are
+  slower" - Enhanced, also decomposed into five services, performs
+  comparably to Monolith once CDN delivery is added.
+- **Status:** COMPLETE. Stored as the validated frontend page-load
+  performance dataset for Section 4.7.3.10. Supersedes no other dataset;
+  distinct from and complementary to Section 4.7.3.9's CDN cache-hit/miss
+  results.
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - Frontend Page Load Performance Evaluation.
+
+## [2026-07-31] Section 4.7.3.4 Performance Evaluation - compiled from seven already-completed experiments
+
+- **Context:** compiled the dissertation's Section 4.7.3.4 Performance
+  Evaluation, synthesising seven experiments already executed and
+  recorded independently in this file - Deployment Availability, the
+  Resource Utilisation experiment, Autoscaling Responsiveness (HPA),
+  Redis Cache Effectiveness (v3, final), Network Communication
+  Efficiency (Experiment #12, extended), and Network Isolation and
+  Security Effectiveness (Experiment #11) - together with the raw k6
+  summary JSON from the End-to-End Customer Checkout Transaction
+  Performance Evaluation's 25 VU and 100 VU runs
+  (`k6-tests/results/e2e-checkout-transaction-experiment/`), read
+  directly rather than recalled, to extract p95 latency and throughput
+  figures not previously written up as a standalone comparison table.
+  No new experiments were run for this section.
+
+- **Scope decision, per explicit instruction:** this section presents
+  evidence of where the Enhanced architecture demonstrated improved
+  cloud-native characteristics (availability during deployment,
+  throughput scaling under load, autoscaling elasticity, adaptive
+  resource allocation, cache effectiveness, internal communication
+  reliability, and enforced network isolation). Conditions under which
+  Enhanced did not show an advantage - internal-communication tail
+  latency/variance versus Baseline's simpler EC2-to-EC2 path (Experiment
+  #12), low-load latency parity rather than superiority, and other
+  trade-offs - are deliberately deferred to the not-yet-written Section
+  4.7.3.5 (Discussion and Trade-offs), consistent with the two
+  sections' distinct scopes.
+
+- **Self-review correction applied before acceptance:** an initial draft
+  of the Network Communication Efficiency subsection risked implying
+  Enhanced's internal path was fastest or most consistent. The
+  underlying data (Experiment #12 extended, 2026-07-29) actually shows
+  Baseline's as-deployed EC2-to-EC2 path is both faster and less
+  variable at the tail than Enhanced's VPC-private pod-to-pod path. The
+  subsection was revised to report only what the data supports for this
+  section's evidence-of-advantage scope: functional reliability (0
+  errors across N=500) and low absolute median latency (6.7ms) for
+  Enhanced's internal path, without a comparative superiority claim.
+  Monolith's checkout-throughput figures at 100 VU were also flagged
+  with the pre-established Stripe rate-limit (Category B) caveat from
+  the Phase 7 entry rather than presented as a clean architectural
+  result.
+
+- **Result:** full section, all seven metric tables, chart
+  recommendations, and interpretations, plus an appended examiner-review
+  checklist, written to
+  `k6-tests/results/performance-evaluation-4.7.3.4/dissertation-writeup.md`.
+
+- **Status:** COMPLETE. Approved for inclusion in Chapter 4 per the
+  self-conducted examiner review documented in the writeup file itself.
+- **Stage:** cross-cutting (Monolith, Baseline Microservices, Enhanced
+  Microservices) - Section 4.7.3.4 Performance Evaluation.
